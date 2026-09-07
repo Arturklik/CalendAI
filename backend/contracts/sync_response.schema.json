@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SyncResponse",
+  "type": "object",
+  "required": ["sync_timestamp", "server_changes"],
+  "properties": {
+    "sync_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "server_changes": {
+      "type": "array",
+      "items": { "$ref": "calendar_event.schema.json" }
+    }
+  }
+}

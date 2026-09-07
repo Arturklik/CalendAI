@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CalendAI</title>
+  <link rel="stylesheet" href="/web/styles.css" />
+</head>
+<body>
+  <div id="auth" class="screen">
+    <div class="card auth-card">
+      <p class="eyebrow">локальная бета</p>
+      <h1>CalendAI</h1>
+      <p class="muted">Календарь пар: вручную или из текста расписания.</p>
+      <div class="tabs">
+        <button type="button" id="tab-login" class="tab on">Вход</button>
+        <button type="button" id="tab-register" class="tab">Регистрация</button>
+      </div>
+      <label>Email<input id="email" type="email" autocomplete="username" /></label>
+      <label>Пароль<input id="password" type="password" autocomplete="current-password" minlength="8" /></label>
+      <p id="auth-error" class="error" hidden></p>
+      <button type="button" id="auth-submit" class="primary">Войти</button>
+    </div>
+  </div>
+
+  <div id="app" class="screen" hidden>
+    <header class="top">
+      <div>
+        <p class="eyebrow">CalendAI</p>
+        <strong id="who"></strong>
+      </div>
+      <div class="top-actions">
+        <button type="button" id="btn-sync" class="ghost">Синк</button>
+        <button type="button" id="btn-logout" class="ghost">Выйти</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="month-nav">
+          <button type="button" id="prev-month" class="icon">‹</button>
+          <h2 id="month-title"></h2>
+          <button type="button" id="next-month" class="icon">›</button>
+        </div>
+        <div class="weekdays" id="weekdays"></div>
+        <div class="grid" id="grid"></div>
+      </section>
+
+      <section class="panel day-panel">
+        <h3 id="day-title"></h3>
+        <div id="day-events" class="event-list"></div>
+        <button type="button" id="btn-add" class="primary">Добавить занятие</button>
+      </section>
+    </main>
+
+    <section class="panel ai-panel">
+      <h3>Распознать текст</h3>
+      <p class="muted">Пока без ключа Vision это тестовое занятие. Потом сюда же пойдёт настоящее расписание.</p>
+      <textarea id="ai-text" rows="3" placeholder="1 пара Матанализ лк, ауд. 214"></textarea>
+      <div class="row">
+        <button type="button" id="btn-parse" class="primary">Распознать</button>
+        <button type="button" id="btn-confirm" class="ghost" disabled>Добавить в календарь</button>
+      </div>
+      <pre id="ai-preview" class="preview" hidden></pre>
+    </section>
+  </div>
+
+  <dialog id="event-dialog">
+    <form id="event-form" method="dialog">
+      <h3>Новое занятие</h3>
+      <label>Название<input id="ev-title" required /></label>
+      <label>Тип
+        <select id="ev-type">
+          <option value="lecture">Лекция</option>
+          <option value="practice">Практика</option>
+          <option value="lab">Лабораторная</option>
+          <option value="exam">Экзамен</option>
+          <option value="other">Другое</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>Начало<input id="ev-start" type="time" value="09:00" required /></label>
+        <label>Конец<input id="ev-end" type="time" value="10:35" required /></label>
+      </div>
+      <label>Аудитория<input id="ev-location" /></label>
+      <p id="ev-error" class="error" hidden></p>
+      <div class="row">
+        <button type="button" id="ev-cancel" class="ghost">Отмена</button>
+        <button type="submit" class="primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <p id="toast" hidden></p>
+  <script src="/web/app.js"></script>
+</body>
+</html>

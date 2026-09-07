@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SyncRequest",
+  "type": "object",
+  "required": ["client_changes"],
+  "properties": {
+    "last_sync_timestamp": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "null on first sync"
+    },
+    "client_changes": {
+      "type": "array",
+      "items": { "$ref": "calendar_event.schema.json" }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+.venv/
+**/__pycache__/
+*.py[cod]
+*.db
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+_arthur_src/
+.DS_Store
+mobile/.dart_tool/
+mobile/build/
+backend/calendai.db

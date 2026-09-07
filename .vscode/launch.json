@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "CalendAI API",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--host", "127.0.0.1", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "jinja": true,
+      "envFile": "${workspaceFolder}/backend/.env"
+    },
+    {
+      "name": "CalendAI Telegram bot",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/bot/main.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "envFile": "${workspaceFolder}/backend/.env"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "CalendAI: API + bot",
+      "configurations": ["CalendAI API", "CalendAI Telegram bot"],
+      "stopAll": true
+    }
+  ]
+}

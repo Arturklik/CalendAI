@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: calendai
+      POSTGRES_PASSWORD: calendai
+      POSTGRES_DB: calendai
+    ports:
+      - "5432:5432"
+    volumes:
+      - calendai_pg:/var/lib/postgresql/data
+      - ./sql/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+
+volumes:
+  calendai_pg:

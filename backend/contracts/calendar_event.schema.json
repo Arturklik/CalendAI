@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CalendarEvent",
+  "type": "object",
+  "required": ["id", "title", "start_time", "end_time", "updated_at", "is_deleted"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique event id (UUIDv4). Generated on client or server."
+    },
+    "title": {
+      "type": "string",
+      "description": "Event or course title."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": ["lecture", "practice", "lab", "exam", "other"],
+      "default": "other"
+    },
+    "start_time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end_time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "location": {
+      "type": ["string", "null"]
+    },
+    "teacher": {
+      "type": ["string", "null"]
+    },
+    "description": {
+      "type": ["string", "null"]
+    },
+    "recurrence_rule": {
+      "type": ["string", "null"],
+      "description": "RFC 5545 RRULE, e.g. FREQ=WEEKLY;INTERVAL=2"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "is_deleted": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
