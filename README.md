@@ -1,156 +1,186 @@
 # CalendAI
 
-Экосистема расписания: фото/текст → ИИ → календарь. Закрытая бета без оплаты.
+Календарь пар университета: фото или текст расписания → ИИ → события в календаре. Закрытая бета, без оплаты.
 
-| Часть | Кто | Где |
-|---|---|---|
-| Backend API, БД, синк, Telegram-бот | Антон | `backend/`, `bot/`, `web/` |
-| Flutter (офлайн-календарь) + AI-парсер | Артур | `mobile/`, `ai_module/` |
+| Модуль | Что делает | Кто | Где |
+|---|---|---|---|
+| `backend/` | REST API: авторизация, события, дифф-синк, ИИ-эндпоинты, квоты | Антон | FastAPI + SQLAlchemy |
+| `web/` | Веб-календарь (отдаётся тем же API-сервером) | Антон | vanilla JS |
+| `bot/` | Telegram-бот: ввод расписания фото/текстом | Антон | python-telegram-bot |
+| `mobile/` | Flutter-приложение: офлайн-календарь + синк | Артур | Flutter |
+| `ai_module/` | Парсер расписаний через Vision API | Артур | Python |
+| `backend/contracts/` | Контракты данных — источник правды | общий | JSON Schema |
 
-Канонический контракт события — в `mobile/AGENTS.md` и `backend/contracts/`.
+## Как это работает
 
----
+1. Пользователь кидает боту **фото или текст расписания** → ИИ распознаёт пары → превью → кнопка «Добавить» → события в БД.
+2. Телефон и веб забирают события **дифференциальным синком** `POST /api/v1/sync`.
+3. Веб и мобилка — просмотр и ручное редактирование; Telegram — быстрый ввод.
 
-## Как задумано
+Известное ограничение: аккаунт, созданный ботом (по `telegram_id`), и аккаунт, созданный на сайте (по email), — это пока **разные пользователи**. Привязку запланировали на потом.
 
-Пользователь на ходу кидает в **Telegram** фото расписания или текст. Бот показывает распознанные пары и спрашивает подтверждение. После «Добавить» события попадают в общую базу. Телефон и сайт потом забирают их синком.
+## Контракт события
 
-Веб и мобилка — смотреть и править руками. Telegram — быстрый ввод.
+Канонические описания: `backend/contracts/calendar_event.schema.json` и `mobile/AGENTS.md`.
 
-## Как сделано сейчас
+- `id` — UUIDv4, генерирует клиент или сервер (клиент генерирует офлайн).
+- `start_time` / `end_time` — ISO 8601, **обязательно с часовым поясом**; `end_time > start_time`.
+- Удаление — мягкое: `is_deleted=true`, запись остаётся и разъезжается синком.
+- Разрешение конфликтов (LWW): клиентская копия побеждает, только если `client.updated_at > server.updated_at`.
 
-Бот уже ходит в наш API, не в пустоту.
-
-1. API должен быть запущен на `http://127.0.0.1:8000`.
-2. В Telegram пишешь боту `/start`.
-3. Бот создаёт пользователя по `telegram_id` (это **отдельный** аккаунт, не email с сайта).
-4. Кидаешь **фото** или **текст** → ИИ (пока заглушка, если нет ключа) → превью.
-5. Кнопки **Добавить** / **Отмена**. Добавить пишет события в БД.
-6. `/events` — список ближайших событий этого telegram-аккаунта.
-
-Ещё нет:
-
-- привязки бота к email с телефона (календари пока разные);
-- войса (Whisper);
-- оплаты.
-
-Локально бот работает так: процесс на твоём ПК сам опрашивает Telegram и сам стучится в `localhost`. Туннель наружу не нужен.
+Синк: запрос `{ "last_sync_timestamp": null | ISO, "client_changes": [CalendarEvent] }`, ответ `{ "sync_timestamp", "server_changes": [CalendarEvent] }`.
 
 ---
 
-## Запуск из VS Code / Cursor
+## Запуск backend + web
 
-Нужен Python 3.12. Виртуальное окружение уже лежит в `backend/.venv`.
+Нужен Python 3.12+. Postgres не обязателен — локально хватает SQLite.
 
-1. Открой папку `CalendAI` как корень воркспейса.
-2. Расширения: **Python** и **Python Debugger** (`ms-python.python`, `ms-python.debugpy`).
-3. Interpreter: `backend/.venv/Scripts/python.exe` (в `.vscode/settings.json` уже прописан).
-4. Скопируй `backend/.env.example` → `backend/.env`, если файла ещё нет.
-5. Для SQLite на локалке в `.env` должно быть:
-   ```
-   DATABASE_URL=sqlite:///./calendai.db
-   ```
-6. Run and Debug (`Ctrl+Shift+D`):
-   - **CalendAI API** — сайт + REST API;
-   - **CalendAI Telegram bot** — только бот (API уже должен работать);
-   - **CalendAI: API + bot** — оба сразу.
+```bash
+cd backend
+python3.12 -m venv .venv
+source .venv/bin/activate            # PowerShell: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env                 # PowerShell: copy .env.example .env
+```
 
-После старта API:
+В `.env` для локалки достаточно:
+
+```
+DATABASE_URL=sqlite:///./calendai.db
+```
+
+Запуск:
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
 
 - веб-календарь: http://127.0.0.1:8000/
 - Swagger: http://127.0.0.1:8000/docs
 - health: http://127.0.0.1:8000/health
 
-### Telegram с локалки
+В VS Code / Cursor уже лежат конфиги запуска (`.vscode/launch.json`): **CalendAI API**, **CalendAI Telegram bot**, **CalendAI: API + bot**. Интерпретатор — `backend/.venv` (на Windows `backend/.venv/Scripts/python.exe` см. `.vscode/settings.json`).
 
-1. В Telegram: [@BotFather](https://t.me/BotFather) → `/newbot` → скопируй токен.
+### Postgres (когда понадобится не только файл)
+
+```bash
+cd backend
+docker compose up -d
+```
+
+И в `.env` укажите postgres-URL из `.env.example`:
+
+```
+DATABASE_URL=postgresql+psycopg2://calendai:calendai@localhost:5432/calendai
+```
+
+---
+
+## Запуск Telegram-бота
+
+1. [@BotFather](https://t.me/BotFather) → `/newbot` → скопируйте токен.
 2. В `backend/.env`:
+
    ```
    TELEGRAM_BOT_TOKEN=123:AA...
    BOT_API_KEY=dev-bot-key-change-me
    API_BASE_URL=http://127.0.0.1:8000
    AI_STUB=true
    ```
-   `BOT_API_KEY` в `.env` и то, что читает бот, должны совпадать.
-3. Запусти **CalendAI: API + bot**.
-4. Найди своего бота в Telegram → `/start` → кинь текст вроде `1 пара Матанализ лк, ауд. 214` → **Добавить**.
-5. `/events` или веб: события этого telegram-пользователя. В веб нужно войти **тем же** аккаунтом — пока это не так, смотри список через `/events` в боте.
 
-Если токен пустой, бот сразу выходит с ошибкой `TELEGRAM_BOT_TOKEN is empty`.
+   `BOT_API_KEY` в `.env` и тот, что читает бот, должны совпадать.
+3. API должен быть запущен (см. выше), затем бот:
 
-### Терминал VS Code (если без F5)
+   ```bash
+   backend/.venv/bin/python bot/main.py     # PowerShell: .\backend\.venv\Scripts\python.exe bot\main.py
+   ```
 
-```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --port 8000
-```
-
-Второе окно:
-
-```powershell
-cd D:\WorkSpace\project\CalendAI
-.\backend\.venv\Scripts\python.exe bot\main.py
-```
+   Бот опрашивает Telegram сам, туннель наружу не нужен. Если `TELEGRAM_BOT_TOKEN` пуст — бот сразу выйдет с этой ошибкой.
+4. В Telegram: `/start` → пришлите текст вида `1 пара Матанализ лк, ауд. 214` (или фото расписания) → **Добавить**.
+5. `/events` — список событий этого telegram-аккаунта; в веб этот список попадёт только после привязки аккаунтов (см. ограничение выше).
 
 ---
 
-## Backend (Антон)
+## Запуск мобильного приложения
 
-Стек: FastAPI, SQLAlchemy, JWT, SQLite (локально) / PostgreSQL (цель).
+Нужен Flutter SDK.
 
-### API `/api/v1`
-
-| Метод | Путь | Зачем |
-|---|---|---|
-| POST | `/auth/register` | email + пароль |
-| POST | `/auth/login` | JWT |
-| GET | `/auth/me` | профиль |
-| POST | `/auth/telegram` | бот создаёт/находит пользователя (`X-Bot-Key`) |
-| GET/POST | `/events` | список / создать |
-| GET/PATCH/DELETE | `/events/{id}` | одно событие, DELETE = soft delete |
-| POST | `/sync` | дифференциальный синк с мобилки |
-| POST | `/ai/parse-text` | текст → кандидаты |
-| POST | `/ai/parse-image` | фото → кандидаты |
-| POST | `/ai/confirm` | записать распознанное в календарь |
-
-Синк: тело `{ "last_sync_timestamp": null \| ISO, "client_changes": [CalendarEvent] }`. Ответ `{ "sync_timestamp", "server_changes" }`. Клиент побеждает, только если `client.updated_at > server.updated_at`.
-
-### Переменные `.env`
-
-См. `backend/.env.example`. Главные:
-
-- `DATABASE_URL` — sqlite или postgres
-- `SECRET_KEY` — подпись JWT
-- `TELEGRAM_BOT_TOKEN` — от BotFather
-- `BOT_API_KEY` — секрет между ботом и API
-- `CALENDAI_API_KEY` / `CALENDAI_BASE_URL` / `CALENDAI_MODEL` — Vision (DeepSeek / OpenAI)
-- `AI_STUB=true` — без ключа не вызывать платную модель
-
-Парсер Артура подключается из `ai_module/` (`ScheduleParser.parse_image` / `parse_text`).
-
----
-
-## Мобилка (Артур)
-
-`mobile/` — Flutter, локальный SQLite, кнопка синка уже бьёт в `POST /api/v1/sync`. Нужен Flutter SDK:
-
-```powershell
+```bash
 cd mobile
-flutter create . --project-name calendai
+flutter create . --project-name calendai   # один раз: генерирует android/, ios/
 flutter pub get
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
-На Android-эмуляторе хост машины: `http://10.0.2.2:8000`.
+На Android-эмуляторе localhost хост-машины — `http://10.0.2.2:8000`. Без запущенного API приложение работает офлайн на локальном SQLite.
 
 ---
 
-## Postgres (когда понадобится не только локальный файл)
+## ИИ-парсер
 
-```powershell
-cd backend
-docker compose up -d
+`ai_module/` ходит в любой OpenAI-совместимый Vision API (OpenAI, DeepSeek, OpenRouter).
+
+- Ключ и модель: `CALENDAI_API_KEY` + `CALENDAI_MODEL` + `CALENDAI_BASE_URL` (есть fallback на `OPENAI_*`).
+- `AI_STUB=true` — работает заглушка: ключ не нужен, квота не списывается, возвращается тестовое занятие.
+- `AI_STUB=false` — реальные вызовы, квота считается.
+
+Квоты на неделю: `free` — 0, `plus` — 7, `pro` — 70 запросов. Сброс — раз в 7 дней (`week_reset_at`).
+
+Проверка парсера из терминала:
+
+```bash
+backend/.venv/bin/python -m ai_module.cli --text "1 пара Матанализ лк, ауд. 214" --date 2026-09-08
+backend/.venv/bin/python -m ai_module.cli --image schedule.png --date 2026-09-08 --tz +03:00
 ```
 
-В `.env` раскомментируй postgres `DATABASE_URL` из `.env.example`.
+---
+
+## API `/api/v1`
+
+| Метод | Путь | Зачем |
+|---|---|---|
+| POST | `/auth/register` | email + пароль → JWT |
+| POST | `/auth/login` | JWT |
+| POST | `/auth/token` | OAuth2-форма для Swagger Authorize |
+| POST | `/auth/telegram` | бот создаёт/находит пользователя (`X-Bot-Key`) |
+| GET | `/auth/me` | профиль текущего пользователя |
+| GET/POST | `/events` | список / создать |
+| GET/PATCH/DELETE | `/events/{id}` | одно событие; DELETE — soft delete |
+| POST | `/sync` | дифференциальный синк (`X-Device-Id` опционален) |
+| POST | `/ai/parse-text` | текст → кандидаты |
+| POST | `/ai/parse-image` | фото → кандидаты |
+| POST | `/ai/confirm` | записать распознанное в календарь |
+
+Парсер подключается из `ai_module/` через `backend/app/services/parser_bridge.py`.
+
+---
+
+## Клонировать только нужную часть кода
+
+Репозиторий один, но скачивать всё не обязательно. Чтобы получить, например, только backend/web/bot без мобильного кода:
+
+```bash
+git clone --filter=blob:none --no-checkout git@github.com:Arturklik/CalendAI.git
+cd CalendAI
+git sparse-checkout init --cone
+git sparse-checkout set backend web bot ai_module
+git checkout <branch>
+```
+
+Наборы путей:
+
+- backend-разработчик: `backend web bot ai_module`
+- мобильный разработчик: `mobile ai_module backend/contracts`
+
+Чтобы снова получить всё: `git sparse-checkout disable`. Это локальная настройка клона — на репозиторий и других участников не влияет.
+
+---
+
+## Что ещё не сделано
+
+- привязка Telegram-аккаунта к email-аккаунту (календари пока раздельные);
+- войс-ввод (Whisper);
+- оплата планов;
+- миграции схем (сейчас `create_all` + дроп устаревшей SQLite-схемы при старте);
+- автоматические тесты backend.

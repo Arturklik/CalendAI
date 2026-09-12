@@ -86,7 +86,7 @@ async def _upsert(telegram_id: int, display_name: Optional[str]) -> dict:
     last_error: Exception | None = None
     for _ in range(3):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
                 response = await client.post(
                     f"{API_BASE}/auth/telegram",
                     json={"telegram_id": telegram_id, "display_name": display_name},
@@ -144,7 +144,7 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     try:
         await _upsert(update.effective_user.id, update.effective_user.full_name)
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             response = await client.get(
                 f"{API_BASE}/events",
                 headers=_headers(update.effective_user.id),
@@ -201,7 +201,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     telegram_id = update.effective_user.id
     try:
         await _upsert(telegram_id, update.effective_user.full_name)
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
             response = await client.post(
                 f"{API_BASE}/ai/parse-text",
                 json={"text": text},
@@ -239,7 +239,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         buffer = io.BytesIO()
         await file.download_to_memory(buffer)
         buffer.seek(0)
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
             response = await client.post(
                 f"{API_BASE}/ai/parse-image",
                 headers=_headers(telegram_id),
@@ -281,7 +281,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("Нечего добавлять. Пришлите расписание ещё раз.")
         return
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             response = await client.post(
                 f"{API_BASE}/ai/confirm",
                 json={"events": events},
