@@ -39,6 +39,14 @@ function startOfMonth(date) {
 function pad(n) {
   return String(n).padStart(2, "0");
 }
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 function isoWithOffset(date) {
   const offsetMin = -date.getTimezoneOffset();
   const sign = offsetMin >= 0 ? "+" : "-";
@@ -177,10 +185,10 @@ function render() {
       <article class="event">
         <div class="swatch" style="background:${TYPE_COLOR[ev.event_type] || TYPE_COLOR.other}"></div>
         <div>
-          <div>${ev.title}</div>
-          <small>${meta}</small>
+          <div>${escapeHtml(ev.title)}</div>
+          <small>${escapeHtml(meta)}</small>
         </div>
-        <span class="chip">${TYPE_LABEL[ev.event_type] || ev.event_type}</span>
+        <span class="chip">${TYPE_LABEL[ev.event_type] || escapeHtml(ev.event_type)}</span>
       </article>
     `;
   }).join("");

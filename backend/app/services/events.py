@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models import Event, EventType, SyncLog, User, new_uuid, utcnow
@@ -84,6 +85,13 @@ def get_event_for_user(db: Session, user: User, event_id: UUID) -> Optional[Even
 
 def update_event(db: Session, event: Event, payload: EventUpdate) -> Event:
     data = payload.model_dump(exclude_unset=True)
+    start_time = data.get("start_time", event.start_time)
+    end_time = data.get("end_time", event.end_time)
+    if end_time <= start_time:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="end_time must be after start_time",
+        )
     for key, value in data.items():
         setattr(event, key, value)
     event.updated_at = utcnow()
