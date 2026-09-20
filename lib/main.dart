@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
 import 'screens/calendar_screen.dart';
+import 'services/api_config.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Загружаем сохранённый кастомный адрес API (если задавался).
+  await ApiConfig.load();
   runApp(const CalendAIApp());
 }
 

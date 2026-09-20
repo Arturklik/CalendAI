@@ -6,7 +6,7 @@ CalendAI is an offline-first schedule and calendar ecosystem. It automatically c
 ## Architecture & Responsibilities
 - Framework: Flutter (Android & iOS).
 - Local Database: SQLite (via Drift or sqflite) with full offline-first functionality.
-- Sync Strategy: Differential sync via `SyncRepository`. Backend API: `POST /api/v1/sync` (Last-Write-Wins, см. `backend/app/services/sync_service.py`).
+- Sync Strategy: Differential sync via `SyncRepository`; рабочая реализация — `HttpSyncRepository` (`lib/repositories/http_sync_repository.dart`) поверх `POST /api/v1/sync` (Last-Write-Wins, см. `backend/app/services/sync_service.py`). JWT хранится в `AuthStorage` (SharedPreferences), base URL — `ApiConfig` (Android-эмулятор `10.0.2.2`, iOS/desktop `127.0.0.1`, кастомный IP через `ApiConfig.setCustomHost`). `MockSyncRepository` — только для UI-разработки без бэкенда.
 - AI Module: Python service using Pydantic v2 and external APIs (OpenAI SDK / DeepSeek / Vision models) with strict JSON output.
 - Backend (`backend/`): FastAPI (async) + PostgreSQL (SQLAlchemy 2.0 asyncio + asyncpg) + Alembic, JWT-аутентификация, Telegram-бот (aiogram 3). Зеркалирует канонический контракт события; тесты на pytest (SQLite in-memory), запуск: `cd backend && pytest -q`; инфраструктура: `docker compose -f backend/docker-compose.yml up --build` из корня репозитория.
 

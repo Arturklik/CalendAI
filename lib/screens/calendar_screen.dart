@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../database/app_database.dart';
 import '../models/event.dart';
-import '../repositories/mock_sync_repository.dart';
+import '../repositories/http_sync_repository.dart';
 import '../repositories/sync_repository.dart';
+import '../services/api_exceptions.dart';
+import '../services/auth_storage.dart';
+import '../widgets/auth_dialog.dart';
 
 /// Цветовая дифференциация типов занятий.
 Color eventTypeColor(EventType type) => switch (type) {
@@ -40,11 +43,14 @@ String _fmtTimeOfDay(TimeOfDay time) =>
     '${_twoDigits(time.hour)}:${_twoDigits(time.minute)}';
 
 /// Базовый экран календаря: месячная сетка + список занятий на выбранный день.
+///
+/// [syncRepository] и [authStorage] опциональны: по умолчанию используется
+/// реальная синхронизация с бэкендом ([HttpSyncRepository]) и JWT-хранилище.
 class CalendarScreen extends StatefulWidget {
-  const CalendarScreen({super.key, SyncRepository? syncRepository})
-      : _syncRepository = syncRepository ?? const MockSyncRepository();
+  const CalendarScreen({super.key, this.syncRepository, this.authStorage});
 
-  final SyncRepository _syncRepository;
+  final SyncRepository? syncRepository;
+  final AuthStorage? authStorage;
 
   @override
   State<CalendarScreen> createState() => _CalendarScreenState();
@@ -52,6 +58,11 @@ class CalendarScreen extends StatefulWidget {
 
 class _CalendarScreenState extends State<CalendarScreen> {
   final AppDatabase _db = AppDatabase.instance;
+
+  late final AuthStorage _authStorage =
+      widget.authStorage ?? AuthStorage();
+  late final SyncRepository _syncRepository = widget.syncRepository ??
+      HttpSyncRepository(authStorage: _authStorage);
 
   late DateTime _focusedMonth;
   late DateTime _selectedDate;
@@ -108,30 +119,52 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return list;
   }
 
+  /// Синхронизация с бэкендом.
+  ///
+  /// Без сохранённого JWT сначала показывает диалог входа/регистрации.
+  /// Ошибки API/сети показываются в SnackBar, не роняя приложение.
   Future<void> _sync() async {
     if (_syncing) return;
+
+    if (!await _authStorage.isAuthenticated) {
+      if (!mounted) return;
+      final authenticated = await AuthDialog.show(context, _authStorage);
+      if (!authenticated) return;
+    }
+
     setState(() => _syncing = true);
     try {
       final localChanges = await _db.getPendingChanges(_lastSync);
       final remoteEvents =
-          await widget._syncRepository.sync(_lastSync, localChanges);
+          await _syncRepository.sync(_lastSync, localChanges);
       for (final event in remoteEvents) {
-        await _db.upsertEvent(event);
+        // Сохраняем серверный updated_at без перезаписи клиентским временем,
+        // иначе скачанные события снова попадут в local_changes.
+        await _db.applyRemoteEvent(event);
       }
       _lastSync = DateTime.now().toUtc();
       await _loadMonthEvents();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Синхронизация завершена: получено событий — ${remoteEvents.length}',
-            ),
-          ),
-        );
-      }
+      if (!mounted) return;
+      _showSnackBar(
+        'Синхронизация завершена: получено — ${remoteEvents.length}, '
+        'отправлено — ${localChanges.length}',
+      );
+    } on ApiException catch (exception) {
+      if (!mounted) return;
+      _showSnackBar(exception.message, isError: true);
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
+  }
+
+  void _showSnackBar(String message, {bool isError = false}) {
+    final colors = Theme.of(context).colorScheme;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? colors.error : null,
+      ),
+    );
   }
 
   Future<void> _showCreateEventForm() async {
