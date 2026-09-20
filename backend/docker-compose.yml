@@ -1,0 +1,45 @@
+# CalendAI backend: PostgreSQL 16 + API (FastAPI + Telegram-бот).
+# Запуск из КОРНЯ монорепозитория:
+#   docker compose -f backend/docker-compose.yml up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: calendai-db
+    environment:
+      POSTGRES_USER: calendai
+      POSTGRES_PASSWORD: calendai
+      POSTGRES_DB: calendai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calendai -d calendai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..          # корень монорепозитория (нужен ai_module)
+      dockerfile: backend/Dockerfile
+    container_name: calendai-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://calendai:calendai@db:5432/calendai
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      CALENDAI_API_KEY: ${CALENDAI_API_KEY:-}
+      CALENDAI_BASE_URL: ${CALENDAI_BASE_URL:-https://api.openai.com/v1}
+      CALENDAI_MODEL: ${CALENDAI_MODEL:-gpt-4o-mini}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      BOT_MODE: ${BOT_MODE:-polling}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

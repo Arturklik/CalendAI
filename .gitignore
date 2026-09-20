@@ -15,8 +15,10 @@ ios/
 # macOS
 .DS_Store
 
-# Python (ai_module)
+# Python (ai_module, backend)
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 .env
+*.db

@@ -1,0 +1,18 @@
+# Docker build context = корень монорепозитория (нужны backend/ и ai_module/).
+# Исключаем тяжёлые и служебные директории.
+.git
+.github
+.idea
+.dart_tool
+build
+android
+ios
+mobile
+test
+*.iml
+.DS_Store
+**/__pycache__
+**/.venv
+**/.pytest_cache
+**/.env
+backend/tests
