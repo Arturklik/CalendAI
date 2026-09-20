@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -12,7 +12,6 @@ from ..schemas.auth import (
     TelegramLinkToken,
     Token,
     UserCreate,
-    UserLogin,
     UserResponse,
 )
 from ..services import auth_service
@@ -38,9 +37,41 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)) -> User
 
 
 @router.post("/login", response_model=Token)
-async def login(data: UserLogin, db: AsyncSession = Depends(get_db)) -> Token:
-    """Вход: выдача JWT access token."""
-    user = await auth_service.authenticate_user(db, data.email, data.password)
+async def login(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Token:
+    """Вход: выдача JWT access token.
+
+    Поддерживает как JSON (для мобильного приложения),
+    так и form-data (для кнопки Authorize в Swagger UI).
+    """
+    content_type = request.headers.get("content-type", "")
+    email: str | None = None
+    password: str | None = None
+
+    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        email = str(form.get("username") or form.get("email") or "").strip()
+        password = str(form.get("password") or "")
+    else:
+        try:
+            body = await request.json()
+            email = str(body.get("email") or "").strip()
+            password = str(body.get("password") or "")
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Неверный формат запроса",
+            )
+
+    if not email or not password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Email и пароль обязательны",
+        )
+
+    user = await auth_service.authenticate_user(db, email, password)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
