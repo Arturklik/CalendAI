@@ -55,6 +55,12 @@ class AppDatabase {
     _db = null;
   }
 
+  /// Полная очистка локальной базы данных (при смене пользователя или сбросе).
+  Future<void> clearAll() async {
+    final db = await database;
+    await db.delete(tableEvents);
+  }
+
   /// События, пересекающиеся с диапазоном [start, end) (не удалённые),
   /// отсортированные по времени начала.
   Future<List<Event>> getEventsInRange(DateTime start, DateTime end) async {
@@ -90,6 +96,18 @@ class AppDatabase {
     await db.insert(
       tableEvents,
       _toRow(stamped),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Применяет событие, полученное с сервера при синхронизации.
+  /// Сохраняет серверный updated_at как есть — иначе скачанные события
+  /// снова попали бы в local_changes на следующем синке.
+  Future<void> applyRemoteEvent(Event event) async {
+    final db = await database;
+    await db.insert(
+      tableEvents,
+      _toRow(event),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }

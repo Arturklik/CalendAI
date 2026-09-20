@@ -5,6 +5,7 @@
 2. Вторичная синхронизация — получение серверных изменений.
 3. Last-Write-Wins: конфликт разрешается по updated_at.
 4. Soft-delete: tombstone передаётся на сервер и другому клиенту.
+5. Изоляция и защита от UniqueViolationError при смене аккаунта с чужим id.
 """
 
 from __future__ import annotations
@@ -237,3 +238,30 @@ async def test_sync_isolates_users(
 
     listed_b = await client.get("/api/v1/events", headers=user_b)
     assert listed_b.json() == []
+
+
+async def test_sync_ignores_foreign_event_id_without_500(
+    client: AsyncClient,
+    register_user: AuthFactory,
+    make_event_payload: PayloadFactory,
+) -> None:
+    user_a = await register_user("owner@example.com")
+    user_b = await register_user("intruder@example.com")
+
+    # Пользователь A создал событие с фиксированным ID.
+    event_a = make_event_payload(title="Событие пользователя A")
+    await _sync(client, user_a, None, [event_a])
+
+    # Пользователь B пытается прислать событие с ТЕМ ЖЕ самым ID (например, после смены аккаунта на устройстве).
+    conflicting_event = make_event_payload(
+        id=event_a["id"],
+        title="Попытка перезаписи чужого события",
+    )
+    # Запрос не должен падать с 500 UniqueViolationError, а обязан вернуть 200 OK.
+    body_b = await _sync(client, user_b, None, [conflicting_event])
+    assert body_b["server_changes"] == []
+
+    # Событие пользователя A не изменилось и не перезаписалось.
+    listed_a = await client.get("/api/v1/events", headers=user_a)
+    assert listed_a.status_code == 200
+    assert listed_a.json()[0]["title"] == "Событие пользователя A"

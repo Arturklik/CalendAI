@@ -70,10 +70,12 @@ async def synchronize(
 
     # 2. Применяем клиентские изменения (Last-Write-Wins).
     for change in changes_by_id.values():
-        db_event = await db.scalar(
-            select(Event).where(Event.id == change.id, Event.user_id == user_id)
+        # Ищем событие глобально по ID (среди всех пользователей),
+        # чтобы предотвратить UniqueViolationError при смене аккаунта на клиенте.
+        existing_event = await db.scalar(
+            select(Event).where(Event.id == change.id)
         )
-        if db_event is None:
+        if existing_event is None:
             # Записи нет — вставляем как новую, сохраняя клиентский updated_at.
             db.add(
                 Event(
@@ -92,9 +94,13 @@ async def synchronize(
                 )
             )
             accepted_ids.add(change.id)
-        elif change.updated_at > _as_utc(db_event.updated_at):
-            # Клиент новее — перезаписываем все поля (включая is_deleted).
-            _apply_changes(db_event, change)
+        elif existing_event.user_id != user_id:
+            # Событие принадлежит другому пользователю.
+            # Безопасно пропускаем, чтобы не ронять синк всего батча.
+            continue
+        elif change.updated_at > _as_utc(existing_event.updated_at):
+            # Событие текущего пользователя и клиент новее — перезаписываем все поля.
+            _apply_changes(existing_event, change)
             accepted_ids.add(change.id)
         # Иначе серверная версия новее — клиентское изменение игнорируется,
         # актуальная версия вернётся клиенту в server_changes.
