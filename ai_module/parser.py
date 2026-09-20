@@ -1,12 +1,12 @@
 """ScheduleParser — распознавание расписаний через OpenAI-совместимый Vision API.
 
-Поддерживает DeepSeek, OpenRouter, GPT-4o-mini и других OpenAI-совместимых
+Поддерживает DeepSeek, OpenRouter, GPT-4o-mini, Google Gemini и других OpenAI-совместимых
 провайдеров. Результат — строго типизированный ScheduleParseResponse
 (Pydantic v2), готовый к записи в календарь.
 
 Конфигурация через аргументы конструктора или переменные окружения (.env):
     CALENDAI_API_KEY  (fallback OPENAI_API_KEY)   — API-ключ, обязателен;
-    CALENDAI_BASE_URL (fallback OPENAI_BASE_URL)  — например https://api.deepseek.com;
+    CALENDAI_BASE_URL (fallback OPENAI_BASE_URL)  — например https://generativelanguage.googleapis.com/v1beta/openai/;
     CALENDAI_MODEL    (fallback OPENAI_MODEL)     — по умолчанию gpt-4o-mini.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from dotenv import load_dotenv
-from openai import BadRequestError, OpenAI
+from openai import OpenAI
 
 try:  # пакетный импорт (python -m ai_module.cli)
     from .models import ScheduleParseResponse
@@ -208,9 +208,9 @@ class ScheduleParser:
                     },
                 },
             )
-        except BadRequestError:
-            # Часть провайдеров (например, DeepSeek) не поддерживает json_schema —
-            # откатываемся на базовый JSON-режим (структуру задаёт промпт).
+        except Exception:
+            # Если провайдер (Gemini / DeepSeek) не поддерживает strict json_schema,
+            # откатываемся на базовый JSON-режим (структуру задаёт системный промпт).
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
