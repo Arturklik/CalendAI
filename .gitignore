@@ -7,10 +7,12 @@ build/
 .idea/
 *.iml
 .vscode/
+devtools_options.yaml
 
 # Platform scaffolding (генерируется через flutter create)
 android/
 ios/
+macos/
 
 # macOS
 .DS_Store
@@ -22,3 +24,7 @@ __pycache__/
 .pytest_cache/
 .env
 *.db
+# Изолированный Python/uv и логи локального бэкенда
+backend/.python/
+backend/.tools/
+backend/.uvicorn.log

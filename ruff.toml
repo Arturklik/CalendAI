@@ -1,0 +1,20 @@
+# Линтер Python-кода монорепозитория (backend/ и ai_module/).
+# Запуск: ruff check backend ai_module
+
+target-version = "py310"
+
+[lint]
+select = [
+    "E4",  # pycodestyle: импорты
+    "E7",  # pycodestyle: устаревшие конструкции
+    "E9",  # pycodestyle: ошибки выполнения
+    "F",   # pyflakes
+    "I",   # isort: порядок импортов
+    "UP",  # pyupgrade: современный синтаксис аннотаций
+    "B",   # flake8-bugbear
+    "DTZ", # flake8-datetimez: работа с таймзонами
+]
+ignore = [
+    # FastAPI: Depends/Query/File в значениях по умолчанию — идиома фреймворка.
+    "B008",
+]

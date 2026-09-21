@@ -52,33 +52,61 @@ API поднимется на `http://localhost:8000` (docs: `/docs`, health: `/
 
 ## Локальная разработка
 
+Нужен Python 3.10+. Вариант А — системный интерпретатор:
+
 ```bash
 cd backend
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Вариант Б — изолированный Python внутри проекта (если системного 3.10+ нет;
+`.tools/` и `.python/` в `.gitignore` и не зависят от системного окружения):
+
+```bash
+cd backend
+mkdir -p .tools
+curl -sSL https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz \
+  | tar -xz -C .tools --strip-components=1        # macOS ARM; для других платформ — свой архив uv
+UV_PYTHON_INSTALL_DIR="$PWD/.python" .tools/uv venv .venv --python 3.12
+UV_PYTHON_INSTALL_DIR="$PWD/.python" .tools/uv pip install \
+  --python .venv/bin/python -r requirements.txt
+```
+
+Далее (для любого варианта):
+
+```bash
 cp .env.example .env          # заполнить JWT_SECRET_KEY, CALENDAI_API_KEY, ...
 
-# PostgreSQL (или поднимите только БД из compose):
+# БД: PostgreSQL из compose либо SQLite для быстрого старта —
+#   DATABASE_URL=sqlite+aiosqlite:///./calendai.db в .env
 docker compose -f docker-compose.yml up db -d
 
 alembic upgrade head          # миграции
-uvicorn app.main:app --reload # API + Telegram-бот (polling)
+uvicorn app.main:app --port 8000   # API + Telegram-бот (polling)
 ```
 
 `ai_module` импортируется из корня монорепозитория: `app/__init__.py`
 автоматически добавляет корень репозитория в `sys.path` при локальном запуске
 (в Docker это делает `PYTHONPATH=/app`).
 
-## Тесты
+> При запуске в фоне удобно писать лог в файл:
+> `nohup .venv/bin/uvicorn app.main:app --port 8000 > .uvicorn.log 2>&1 &`
+
+## Тесты и линтер
 
 ```bash
 cd backend
-pytest -q
+pytest -q                       # тесты (SQLite in-memory, без PostgreSQL)
+
+cd ..                           # из корня репозитория
+ruff check backend ai_module    # линтер (конфиг ruff.toml в корне)
 ```
 
-Тесты используют SQLite in-memory (aiosqlite, StaticPool) и не требуют
-PostgreSQL: регистрация/логин/JWT, CRUD событий, первичная и вторичная
-синхронизация, разрешение конфликтов LWW, распространение soft-delete.
+Тесты покрывают: регистрация/логин/JWT, CRUD событий, первичную и вторичную
+синхронизацию, разрешение конфликтов LWW, распространение soft-delete,
+промпты `ScheduleParser` (опорная дата) и форматирование превью расписания
+в Telegram-боте (группировка по дням недели).
 
 ## API (v1, префикс `/api/v1`)
 
@@ -93,6 +121,12 @@ PostgreSQL: регистрация/логин/JWT, CRUD событий, перв
 | POST | `/sync` | Дифференциальная синхронизация (LWW) |
 | POST | `/ai/parse-image` | Распознавание расписания с изображения |
 | POST | `/ai/parse-text` | Распознавание расписания из текста |
+
+AI-эндпоинты принимают `base_date` — **опорную дату** (день отправки
+сообщения) и `tz` (смещение, по умолчанию `+07:00`). Даты занятий модель
+выводит из самого расписания: день недели → ближайшая дата с этим днём
+недели, начиная с опорной; явная дата → она сама; если дат и дней недели
+нет → опорная дата.
 
 ### Синхронизация (`POST /api/v1/sync`)
 
@@ -130,3 +164,12 @@ PostgreSQL: регистрация/логин/JWT, CRUD событий, перв
 Режимы: `BOT_MODE=polling` (по умолчанию, фоновая задача в lifespan) или
 `BOT_MODE=webhook` (+ `WEBHOOK_URL`, `WEBHOOK_SECRET`; приём обновлений на
 `POST /tg/webhook`).
+
+> **Важно:** с одним `TELEGRAM_BOT_TOKEN` одновременно может работать только
+> один poller. Не запускайте локальный `uvicorn` и Docker-контейнер
+> одновременно, если у обоих задан токен: Telegram начнёт раскидывать апдейты
+> между ними (`TelegramConflictError: terminated by other getUpdates request`),
+> и бот будет «видеть» только часть сообщений (а `/start` и фото могут попасть
+> в разные базы данных). Перед запуском второго экземпляра остановите первый:
+> `docker compose -f backend/docker-compose.yml stop backend` или `Ctrl+C`
+> в терминале с `uvicorn`.
