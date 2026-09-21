@@ -1,58 +1,58 @@
 # CalendAI Backend
 
-Серверная часть CalendAI: асинхронный FastAPI-сервис с PostgreSQL,
-JWT-аутентификацией, дифференциальной синхронизацией (Last-Write-Wins),
-Telegram-ботом (aiogram 3) и интеграцией AI-модуля распознавания расписаний.
+Server side of CalendAI: an async FastAPI service with PostgreSQL, JWT
+authentication, differential synchronization (Last-Write-Wins), a Telegram bot
+(aiogram 3), and direct integration with the AI timetable recognition module.
 
-## Стек
+## Stack
 
 - Python 3.10+, FastAPI, SQLAlchemy 2.0 (asyncio + asyncpg), Alembic
 - Pydantic v2 / pydantic-settings
 - JWT (python-jose) + bcrypt (passlib)
-- aiogram 3.x (polling или webhook, в том же процессе, что и API)
-- Прямой импорт `ai_module.ScheduleParser` из корня монорепозитория
+- aiogram 3.x (polling or webhook, running in the same process as the API)
+- Direct import of `ai_module.ScheduleParser` from the monorepo root
 
-## Структура
+## Project structure
 
 ```
 backend/
 ├── app/
-│   ├── main.py            # FastAPI, CORS, роутеры, lifespan (бот)
+│   ├── main.py            # FastAPI app, CORS, routers, lifespan (bot)
 │   ├── config.py          # Pydantic Settings (.env)
-│   ├── database.py        # Async engine, sessionmaker, Base, get_db
-│   ├── db_types.py        # UTCDateTime — aware-UTC на любой СУБД
-│   ├── models/            # User, Event (контракт AGENTS.md)
+│   ├── database.py        # async engine, sessionmaker, Base, get_db
+│   ├── db_types.py        # UTCDateTime — timezone-aware UTC on any DB
+│   ├── models/            # User, Event (AGENTS.md contract)
 │   ├── schemas/           # auth / event / sync (Pydantic v2)
-│   ├── api/               # auth, events, sync, ai роутеры + deps
+│   ├── api/               # auth, events, sync, ai routers + deps
 │   ├── services/          # auth_service, sync_service (LWW), ai_service
-│   └── bot/bot.py         # aiogram 3: фото/войс -> AI -> превью -> save
+│   └── bot/bot.py         # aiogram 3: photo/voice -> AI -> preview -> save
 ├── tests/                 # pytest + pytest-asyncio + httpx (SQLite in-memory)
-├── alembic/               # миграции
-├── Dockerfile             # сборка из КОРНЯ монорепозитория
+├── alembic/               # migrations
+├── Dockerfile             # built from the MONOREPO ROOT
 ├── docker-compose.yml     # postgres:16-alpine + backend
 ├── requirements.txt
 └── .env.example
 ```
 
-## Быстрый старт (Docker)
+## Quick start (Docker)
 
-Сборка и запуск ведутся из **корня монорепозитория** (в образ копируется и
-`backend/`, и `ai_module/`):
+Build and run from the **monorepo root** (the image includes both `backend/`
+and `ai_module/`):
 
 ```bash
 docker compose -f backend/docker-compose.yml up --build
 ```
 
-API поднимется на `http://localhost:8000` (docs: `/docs`, health: `/health`).
-Миграции применяются автоматически при старте контейнера.
+The API is exposed at `http://localhost:8000` (docs: `/docs`, health: `/health`).
+Alembic migrations are applied automatically on container startup.
 
-Переменные окружения можно передать через `backend/.env` (см. `.env.example`)
-или окружение shell: `JWT_SECRET_KEY`, `CALENDAI_API_KEY`, `CALENDAI_BASE_URL`,
-`CALENDAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `BOT_MODE`.
+Environment variables can be supplied via `backend/.env` (see `.env.example`)
+or the shell environment: `JWT_SECRET_KEY`, `CALENDAI_API_KEY`,
+`CALENDAI_BASE_URL`, `CALENDAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `BOT_MODE`.
 
-## Локальная разработка
+## Local development
 
-Нужен Python 3.10+. Вариант А — системный интерпретатор:
+Python 3.10+ is required. Option A — system interpreter:
 
 ```bash
 cd backend
@@ -60,116 +60,118 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Вариант Б — изолированный Python внутри проекта (если системного 3.10+ нет;
-`.tools/` и `.python/` в `.gitignore` и не зависят от системного окружения):
+Option B — project-local isolated Python (if no system 3.10+ is available;
+`.tools/` and `.python/` are gitignored and independent of the system
+environment):
 
 ```bash
 cd backend
 mkdir -p .tools
 curl -sSL https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz \
-  | tar -xz -C .tools --strip-components=1        # macOS ARM; для других платформ — свой архив uv
+  | tar -xz -C .tools --strip-components=1        # macOS ARM; use the matching uv archive on other platforms
 UV_PYTHON_INSTALL_DIR="$PWD/.python" .tools/uv venv .venv --python 3.12
 UV_PYTHON_INSTALL_DIR="$PWD/.python" .tools/uv pip install \
   --python .venv/bin/python -r requirements.txt
 ```
 
-Далее (для любого варианта):
+Then, for either option:
 
 ```bash
-cp .env.example .env          # заполнить JWT_SECRET_KEY, CALENDAI_API_KEY, ...
+cp .env.example .env          # fill in JWT_SECRET_KEY, CALENDAI_API_KEY, ...
 
-# БД: PostgreSQL из compose либо SQLite для быстрого старта —
-#   DATABASE_URL=sqlite+aiosqlite:///./calendai.db в .env
+# Database: PostgreSQL from compose, or SQLite for a quick start —
+#   DATABASE_URL=sqlite+aiosqlite:///./calendai.db in .env
 docker compose -f docker-compose.yml up db -d
 
-alembic upgrade head          # миграции
-uvicorn app.main:app --port 8000   # API + Telegram-бот (polling)
+alembic upgrade head          # migrations
+uvicorn app.main:app --port 8000   # API + Telegram bot (polling)
 ```
 
-`ai_module` импортируется из корня монорепозитория: `app/__init__.py`
-автоматически добавляет корень репозитория в `sys.path` при локальном запуске
-(в Docker это делает `PYTHONPATH=/app`).
+`ai_module` is imported from the monorepo root: `app/__init__.py`
+automatically adds the repository root to `sys.path` for local runs
+(in Docker this is handled by `PYTHONPATH=/app`).
 
-> При запуске в фоне удобно писать лог в файл:
+> For background runs, redirect the log to a file:
 > `nohup .venv/bin/uvicorn app.main:app --port 8000 > .uvicorn.log 2>&1 &`
 
-## Тесты и линтер
+## Tests and linting
 
 ```bash
 cd backend
-pytest -q                       # тесты (SQLite in-memory, без PostgreSQL)
+pytest -q                       # tests (SQLite in-memory, no PostgreSQL needed)
 
-cd ..                           # из корня репозитория
-ruff check backend ai_module    # линтер (конфиг ruff.toml в корне)
+cd ..                           # from the repository root
+ruff check backend ai_module    # linter (config: ruff.toml at the repo root)
 ```
 
-Тесты покрывают: регистрация/логин/JWT, CRUD событий, первичную и вторичную
-синхронизацию, разрешение конфликтов LWW, распространение soft-delete,
-промпты `ScheduleParser` (опорная дата) и форматирование превью расписания
-в Telegram-боте (группировка по дням недели).
+Test coverage: registration/login/JWT, event CRUD, initial and incremental
+synchronization, LWW conflict resolution, soft-delete propagation,
+`ScheduleParser` prompts (base date), and Telegram bot preview formatting
+(per-day grouping).
 
-## API (v1, префикс `/api/v1`)
+## API (v1, prefix `/api/v1`)
 
-| Метод | Путь | Описание |
+| Method | Path | Description |
 |---|---|---|
-| POST | `/auth/register` | Регистрация (201 / 409) |
-| POST | `/auth/login` | Вход, выдача JWT Bearer |
-| GET | `/auth/me` | Профиль текущего пользователя |
-| POST | `/auth/telegram-link-token` | Токен для `/start <token>` в боте |
-| GET/POST | `/events` | Список (с фильтрами) / создание |
-| GET/PATCH/DELETE | `/events/{id}` | Чтение / частичное обновление / soft delete |
-| POST | `/sync` | Дифференциальная синхронизация (LWW) |
-| POST | `/ai/parse-image` | Распознавание расписания с изображения |
-| POST | `/ai/parse-text` | Распознавание расписания из текста |
+| POST | `/auth/register` | Registration (201 / 409) |
+| POST | `/auth/login` | Login, issues a JWT Bearer token |
+| GET | `/auth/me` | Current user profile |
+| POST | `/auth/telegram-link-token` | Token for `/start <token>` in the bot |
+| GET/POST | `/events` | List (with filters) / create |
+| GET/PATCH/DELETE | `/events/{id}` | Read / partial update / soft delete |
+| POST | `/sync` | Differential synchronization (LWW) |
+| POST | `/ai/parse-image` | Timetable recognition from an image |
+| POST | `/ai/parse-text` | Timetable recognition from text |
 
-AI-эндпоинты принимают `base_date` — **опорную дату** (день отправки
-сообщения) и `tz` (смещение, по умолчанию `+07:00`). Даты занятий модель
-выводит из самого расписания: день недели → ближайшая дата с этим днём
-недели, начиная с опорной; явная дата → она сама; если дат и дней недели
-нет → опорная дата.
+AI endpoints accept `base_date` — the **reference date** (the day the message
+was sent) — and `tz` (UTC offset, defaults to `+07:00`). The model derives
+event dates from the timetable itself: a weekday name maps to the nearest
+matching date on or after the base date; an explicit date is used as-is; if
+neither is present, the base date is used.
 
-### Синхронизация (`POST /api/v1/sync`)
+### Synchronization (`POST /api/v1/sync`)
 
 ```json
 {
-  "last_sync_timestamp": "2026-09-08T12:00:00Z",  // null при первичном синке
-  "client_changes": [ /* EventSyncItem: полный контракт события */ ]
+  "last_sync_timestamp": "2026-09-08T12:00:00Z",  // null on the initial sync
+  "client_changes": [ /* EventSyncItem: full event contract */ ]
 }
 ```
 
-Ответ:
+Response:
 
 ```json
 {
   "sync_timestamp": "2026-09-19T10:00:00Z",
-  "server_changes": [ /* события, изменённые на сервере, включая is_deleted */ ]
+  "server_changes": [ /* events changed on the server, including is_deleted */ ]
 }
 ```
 
-Алгоритм (одна транзакция): клиентское изменение применяется, если запись
-отсутствует (INSERT с клиентским `updated_at`) либо клиентский `updated_at`
-новее серверного (UPDATE всех полей, включая `is_deleted`). В ответ
-возвращаются события с `updated_at > last_sync_timestamp` (при `null` — все
-активные), за исключением только что принятых от этого клиента.
+Algorithm (single transaction): a client change is applied if the record does
+not exist (INSERT preserving the client `updated_at`) or if the client
+`updated_at` is newer than the server one (UPDATE of all fields, including
+`is_deleted`). The response contains events with
+`updated_at > last_sync_timestamp` (`null` returns all active events), excluding
+the events just accepted from this client.
 
-## Telegram-бот
+## Telegram bot
 
-1. Пользователь получает токен: `POST /api/v1/auth/telegram-link-token`.
-2. В Telegram: `/start <link_token>` — аккаунт привязан.
-3. Фото расписания (или голосовое) → распознавание через `ai_module` →
-   превью занятий с кнопками «✅ Добавить все в календарь» / «❌ Отмена».
-4. Подтверждение сохраняет события в БД (`is_deleted=False`) — при
-   следующей синхронизации они появятся в мобильном приложении.
+1. The user requests a link token: `POST /api/v1/auth/telegram-link-token`.
+2. In Telegram: `/start <link_token>` — the account is linked.
+3. A timetable photo (or voice message) → recognition via `ai_module` →
+   a per-day preview with inline buttons “✅ Add all to calendar” / “❌ Cancel”.
+4. Confirmation persists the events (`is_deleted=False`) — they appear in the
+   mobile app on the next synchronization.
 
-Режимы: `BOT_MODE=polling` (по умолчанию, фоновая задача в lifespan) или
-`BOT_MODE=webhook` (+ `WEBHOOK_URL`, `WEBHOOK_SECRET`; приём обновлений на
-`POST /tg/webhook`).
+Modes: `BOT_MODE=polling` (default, a background task in the FastAPI lifespan)
+or `BOT_MODE=webhook` (+ `WEBHOOK_URL`, `WEBHOOK_SECRET`; updates are received
+at `POST /tg/webhook`).
 
-> **Важно:** с одним `TELEGRAM_BOT_TOKEN` одновременно может работать только
-> один poller. Не запускайте локальный `uvicorn` и Docker-контейнер
-> одновременно, если у обоих задан токен: Telegram начнёт раскидывать апдейты
-> между ними (`TelegramConflictError: terminated by other getUpdates request`),
-> и бот будет «видеть» только часть сообщений (а `/start` и фото могут попасть
-> в разные базы данных). Перед запуском второго экземпляра остановите первый:
-> `docker compose -f backend/docker-compose.yml stop backend` или `Ctrl+C`
-> в терминале с `uvicorn`.
+> **Important:** only one poller may run per `TELEGRAM_BOT_TOKEN`. Do not run a
+> local `uvicorn` and the Docker container at the same time when both have the
+> token configured: Telegram will split updates between them
+> (`TelegramConflictError: terminated by other getUpdates request`), and the bot
+> will only see a subset of messages (`/start` and photos may even land in
+> different databases). Stop the first instance before starting the second:
+> `docker compose -f backend/docker-compose.yml stop backend` or `Ctrl+C` in
+> the terminal running `uvicorn`.
