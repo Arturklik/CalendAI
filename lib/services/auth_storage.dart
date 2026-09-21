@@ -32,8 +32,8 @@ class AuthStorage {
     return (value == null || value.isEmpty) ? null : value;
   }
 
-  /// Email последнего успешного входа (для подстановки в диалог).
-  Future<String?> get email async {
+  /// Email текущего пользователя (для профиля и подстановки в диалог).
+  Future<String?> get userEmail async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_emailKey);
   }
@@ -62,7 +62,7 @@ class AuthStorage {
 
   /// Вход: `POST /auth/login`, сохраняет полученный JWT.
   Future<void> login(String email, String password) async {
-    final previousEmail = await this.email;
+    final previousEmail = await userEmail;
     final normalizedEmail = email.trim();
     final body = await _post(
       '/auth/login',

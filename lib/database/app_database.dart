@@ -13,7 +13,10 @@ class AppDatabase {
 
   static final AppDatabase instance = AppDatabase._();
 
-  static const String _dbName = 'calendai.db';
+  /// Имя файла локальной БД. Тесты переопределяют его, чтобы каждый
+  /// параллельно запускаемый файл тестов работал со своей базой.
+  static String databaseName = 'calendai.db';
+
   static const int _dbVersion = 1;
   static const String tableEvents = 'events';
 
@@ -22,7 +25,7 @@ class AppDatabase {
   Future<Database> get database async => _db ??= await _open();
 
   Future<Database> _open() async {
-    final path = p.join(await getDatabasesPath(), _dbName);
+    final path = p.join(await getDatabasesPath(), databaseName);
     return openDatabase(
       path,
       version: _dbVersion,

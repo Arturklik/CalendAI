@@ -6,41 +6,32 @@ import '../repositories/http_sync_repository.dart';
 import '../repositories/sync_repository.dart';
 import '../services/api_exceptions.dart';
 import '../services/auth_storage.dart';
+import '../theme/event_type_style.dart';
+import '../utils/day_events.dart';
 import '../widgets/auth_dialog.dart';
-
-/// Цветовая дифференциация типов занятий.
-Color eventTypeColor(EventType type) => switch (type) {
-      EventType.lecture => Colors.blue,
-      EventType.lab => Colors.orange,
-      EventType.practice => Colors.green,
-      EventType.exam => Colors.red,
-      EventType.other => Colors.grey,
-    };
-
-const Map<EventType, String> eventTypeLabels = {
-  EventType.lecture: 'Лекция',
-  EventType.practice: 'Практика',
-  EventType.lab: 'Лабораторная',
-  EventType.exam: 'Экзамен',
-  EventType.other: 'Другое',
-};
+import '../widgets/create_event_sheet.dart';
+import '../widgets/event_card.dart';
+import '../widgets/event_details_sheet.dart';
 
 const List<String> _monthNames = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
 ];
 
+/// Родительный падеж для заголовка дня («20 сентября»).
+const List<String> _monthNamesGenitive = [
+  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+];
+
 const List<String> _weekdayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-String _twoDigits(int value) => value.toString().padLeft(2, '0');
+const List<String> _weekdayFullNames = [
+  'понедельник', 'вторник', 'среда', 'четверг',
+  'пятница', 'суббота', 'воскресенье',
+];
 
-String _fmtTime(DateTime dt) {
-  final local = dt.toLocal();
-  return '${_twoDigits(local.hour)}:${_twoDigits(local.minute)}';
-}
 
-String _fmtTimeOfDay(TimeOfDay time) =>
-    '${_twoDigits(time.hour)}:${_twoDigits(time.minute)}';
 
 /// Базовый экран календаря: месячная сетка + список занятий на выбранный день.
 ///
@@ -68,6 +59,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
   late DateTime _selectedDate;
   List<Event> _monthEvents = [];
   bool _syncing = false;
+  bool _isAuthenticated = false;
+  String? _userEmail;
   DateTime _lastSync = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
 
   @override
@@ -76,7 +69,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final now = DateTime.now();
     _focusedMonth = DateTime(now.year, now.month);
     _selectedDate = DateTime(now.year, now.month, now.day);
+    _refreshAuthState();
     _loadMonthEvents();
+  }
+
+  /// Обновляет состояние авторизации для AppBar (профиль / «Войти»).
+  Future<void> _refreshAuthState() async {
+    final authenticated = await _authStorage.isAuthenticated;
+    final email = authenticated ? await _authStorage.userEmail : null;
+    if (!mounted) return;
+    setState(() {
+      _isAuthenticated = authenticated;
+      _userEmail = email;
+    });
   }
 
   Future<void> _loadMonthEvents() async {
@@ -94,30 +99,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
     _loadMonthEvents();
   }
 
-  /// День месяца -> есть ли события (для точек-индикаторов в сетке).
-  Set<int> get _daysWithEvents {
-    final days = <int>{};
-    for (final e in _monthEvents) {
-      final local = e.startTime.toLocal();
+  /// День месяца -> цвет точки-индикатора (тип первого занятия дня).
+  Map<int, Color> get _dayIndicatorColors {
+    final colors = <int, Color>{};
+    for (final event in _monthEvents) {
+      final local = event.startTime.toLocal();
       if (local.year == _focusedMonth.year &&
           local.month == _focusedMonth.month) {
-        days.add(local.day);
+        colors.putIfAbsent(local.day, () => eventTypeColor(event.eventType));
       }
     }
-    return days;
+    return colors;
   }
 
-  List<Event> get _selectedDayEvents {
-    final dayStart =
-        DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final list = _monthEvents.where((e) {
-      return e.startTime.toLocal().isBefore(dayEnd) &&
-          e.endTime.toLocal().isAfter(dayStart);
-    }).toList();
-    list.sort((a, b) => a.startTime.compareTo(b.startTime));
-    return list;
-  }
+  /// События выбранного дня (сравнение в локальной таймзоне).
+  List<Event> get _selectedDayEvents =>
+      eventsOnDay(_monthEvents, _selectedDate);
 
   /// Синхронизация с бэкендом.
   ///
@@ -130,6 +127,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       if (!mounted) return;
       final authenticated = await AuthDialog.show(context, _authStorage);
       if (!authenticated) return;
+      await _refreshAuthState();
     }
 
     setState(() => _syncing = true);
@@ -167,181 +165,74 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
   }
 
-  Future<void> _showCreateEventForm() async {
-    final titleController = TextEditingController();
-    final locationController = TextEditingController();
-    EventType type = EventType.lecture;
-    TimeOfDay startTime = const TimeOfDay(hour: 9, minute: 0);
-    TimeOfDay endTime = const TimeOfDay(hour: 10, minute: 35);
+  /// Открывает диалог входа/регистрации и обновляет состояние AppBar.
+  Future<void> _openAuthDialog() async {
+    final authenticated = await AuthDialog.show(context, _authStorage);
+    if (authenticated) await _refreshAuthState();
+  }
 
+  /// Выход из аккаунта с подтверждением.
+  ///
+  /// Очищает JWT, локальную БД (события не должны перемешиваться между
+  /// аккаунтами) и сбрасывает метку синхронизации.
+  Future<void> _logout() async {
+    final email = _userEmail;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Выход из аккаунта'),
+        content: Text(
+          email == null || email.isEmpty
+              ? 'Выйти из аккаунта?'
+              : 'Выйти из аккаунта $email?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Выйти'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await _authStorage.clear();
+    await _db.clearAll();
+    _lastSync = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    await _loadMonthEvents();
+    if (!mounted) return;
+    setState(() {
+      _isAuthenticated = false;
+      _userEmail = null;
+    });
+    _showSnackBar('Вы вышли из аккаунта');
+  }
+
+  /// Модальный просмотр деталей занятия; удаление — по кнопке в шторке.
+  Future<void> _showEventDetails(Event event) async {
+    final shouldDelete = await showEventDetailsSheet(context, event);
+    if (!mounted || !shouldDelete) return;
+    await _db.softDeleteEvent(event.id);
+    await _loadMonthEvents();
+    if (!mounted) return;
+    _showSnackBar('Занятие удалено');
+  }
+
+  Future<void> _showCreateEventForm() async {
     final created = await showModalBottomSheet<Event>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) {
-        String? errorText;
-        return StatefulBuilder(
-          builder: (sheetContext, setSheetState) {
-            DateTime combine(TimeOfDay time) => DateTime(
-                  _selectedDate.year,
-                  _selectedDate.month,
-                  _selectedDate.day,
-                  time.hour,
-                  time.minute,
-                );
-
-            Future<void> pickTime(bool isStart) async {
-              final picked = await showTimePicker(
-                context: sheetContext,
-                initialTime: isStart ? startTime : endTime,
-              );
-              if (picked != null) {
-                setSheetState(() {
-                  if (isStart) {
-                    startTime = picked;
-                  } else {
-                    endTime = picked;
-                  }
-                });
-              }
-            }
-
-            void save() {
-              final title = titleController.text.trim();
-              if (title.isEmpty) {
-                setSheetState(() => errorText = 'Введите название занятия');
-                return;
-              }
-              final start = combine(startTime);
-              final end = combine(endTime);
-              if (!end.isAfter(start)) {
-                setSheetState(() =>
-                    errorText = 'Время окончания должно быть позже начала');
-                return;
-              }
-              final location = locationController.text.trim();
-              Navigator.of(sheetContext).pop(
-                Event(
-                  title: title,
-                  eventType: type,
-                  startTime: start,
-                  endTime: end,
-                  location: location.isEmpty ? null : location,
-                ),
-              );
-            }
-
-            final dateLabel =
-                '${_selectedDate.day.toString().padLeft(2, '0')}.'
-                '${_selectedDate.month.toString().padLeft(2, '0')}.'
-                '${_selectedDate.year}';
-
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 16,
-                right: 16,
-                top: 16,
-                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Новое занятие — $dateLabel',
-                    style: Theme.of(sheetContext).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: titleController,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Название',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<EventType>(
-                    initialValue: type,
-                    decoration: const InputDecoration(
-                      labelText: 'Тип',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: EventType.values
-                        .map(
-                          (t) => DropdownMenuItem(
-                            value: t,
-                            child: Row(
-                              children: [
-                                Icon(Icons.circle,
-                                    size: 10, color: eventTypeColor(t)),
-                                const SizedBox(width: 8),
-                                Text(eventTypeLabels[t] ?? t.name),
-                              ],
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value != null) setSheetState(() => type = value);
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => pickTime(true),
-                          icon: const Icon(Icons.schedule),
-                          label: Text('Начало: ${_fmtTimeOfDay(startTime)}'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => pickTime(false),
-                          icon: const Icon(Icons.schedule),
-                          label: Text('Конец: ${_fmtTimeOfDay(endTime)}'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: locationController,
-                    decoration: const InputDecoration(
-                      labelText: 'Аудитория',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  if (errorText != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      errorText!,
-                      style: TextStyle(
-                        color: Theme.of(sheetContext).colorScheme.error,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: save,
-                    icon: const Icon(Icons.check),
-                    label: const Text('Сохранить'),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) => CreateEventSheet(date: _selectedDate),
     );
 
     if (created != null) {
       await _db.upsertEvent(created);
       await _loadMonthEvents();
     }
-    titleController.dispose();
-    locationController.dispose();
   }
 
   @override
@@ -365,6 +256,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               tooltip: 'Синхронизировать',
               onPressed: _sync,
             ),
+          _buildAccountButton(),
         ],
       ),
       body: Column(
@@ -373,6 +265,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           _buildWeekdayRow(),
           _buildMonthGrid(),
           const Divider(height: 1),
+          _buildDayHeader(),
           Expanded(child: _buildEventList()),
         ],
       ),
@@ -407,6 +300,69 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
   }
 
+  /// Кнопка аккаунта: вход для гостя, меню профиля для авторизованного.
+  Widget _buildAccountButton() {
+    if (!_isAuthenticated) {
+      return IconButton(
+        icon: const Icon(Icons.login),
+        tooltip: 'Войти',
+        onPressed: _openAuthDialog,
+      );
+    }
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.account_circle_outlined),
+      tooltip: 'Аккаунт',
+      onSelected: (value) {
+        if (value == 'logout') _logout();
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          enabled: false,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.person_outline),
+            title: Text(_userEmail ?? 'Аккаунт'),
+            subtitle: const Text('Вы вошли в аккаунт'),
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'logout',
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.logout),
+            title: Text('Выйти из аккаунта'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Заголовок выбранного дня над списком занятий.
+  Widget _buildDayHeader() {
+    final selected = _selectedDate;
+    final now = DateTime.now();
+    final isToday = selected.year == now.year &&
+        selected.month == now.month &&
+        selected.day == now.day;
+    final dateLabel =
+        '${selected.day} ${_monthNamesGenitive[selected.month - 1]}';
+    final title = isToday
+        ? 'Сегодня, $dateLabel'
+        : 'Расписание на $dateLabel, ${_weekdayFullNames[selected.weekday - 1]}';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          title,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+    );
+  }
+
   Widget _buildWeekdayRow() {
     return Row(
       children: _weekdayNames
@@ -431,7 +387,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     // Понедельник — первый день недели: weekday 1..7 -> сдвиг 0..6.
     final leadingEmpty = firstOfMonth.weekday - 1;
     final cellCount = ((leadingEmpty + daysInMonth + 6) ~/ 7) * 7;
-    final daysWithEvents = _daysWithEvents;
+    final dayIndicatorColors = _dayIndicatorColors;
     final now = DateTime.now();
 
     return GridView.builder(
@@ -451,7 +407,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
         final isSelected = date == _selectedDate;
         final isToday =
             date.year == now.year && date.month == now.month && date.day == now.day;
-        final hasEvents = daysWithEvents.contains(day);
+        final indicatorColor = dayIndicatorColors[day];
         final colorScheme = Theme.of(context).colorScheme;
 
         return GestureDetector(
@@ -474,16 +430,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     '$day',
                     style: TextStyle(
                       fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.w600 : null,
                       color: isSelected ? colorScheme.onPrimary : null,
                     ),
                   ),
-                  if (hasEvents)
+                  if (indicatorColor != null)
                     Icon(
                       Icons.circle,
-                      size: 4,
+                      size: 5,
+                      // На активном фоне точка — контрастная (onPrimary),
+                      // в остальных днях — цвет типа занятия.
                       color: isSelected
                           ? colorScheme.onPrimary
-                          : colorScheme.primary,
+                          : indicatorColor,
                     ),
                 ],
               ),
@@ -497,54 +456,37 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Widget _buildEventList() {
     final events = _selectedDayEvents;
     if (events.isEmpty) {
-      return const Center(child: Text('Нет занятий на этот день'));
+      return _buildEmptyDayState();
     }
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 88),
       itemCount: events.length,
       itemBuilder: (context, index) {
         final event = events[index];
-        final color = eventTypeColor(event.eventType);
-        final subtitleParts = [
-          '${_fmtTime(event.startTime)} – ${_fmtTime(event.endTime)}',
-          if (event.location != null) event.location!,
-          if (event.teacher != null) event.teacher!,
-        ];
-        return Card(
-          child: IntrinsicHeight(
-            child: Row(
-              children: [
-                Container(
-                  width: 5,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(12),
-                      bottomLeft: Radius.circular(12),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: ListTile(
-                    title: Text(event.title),
-                    subtitle: Text(subtitleParts.join(' · ')),
-                    trailing: Chip(
-                      label: Text(
-                        eventTypeLabels[event.eventType] ??
-                            event.eventType.name,
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      backgroundColor: color.withValues(alpha: 0.15),
-                      side: BorderSide.none,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        return EventCard(
+          event: event,
+          onTap: () => _showEventDetails(event),
         );
       },
+    );
+  }
+
+  /// Дружелюбная заглушка, когда на выбранный день занятий нет.
+  Widget _buildEmptyDayState() {
+    final theme = Theme.of(context);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.event_busy_outlined,
+            size: 48,
+            color: theme.colorScheme.outline,
+          ),
+          const SizedBox(height: 12),
+          Text('На этот день занятий нет', style: theme.textTheme.bodyMedium),
+        ],
+      ),
     );
   }
 }

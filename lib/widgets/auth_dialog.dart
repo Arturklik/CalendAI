@@ -43,7 +43,7 @@ class _AuthDialogState extends State<AuthDialog> {
   }
 
   Future<void> _prefillEmail() async {
-    final saved = await widget.authStorage.email;
+    final saved = await widget.authStorage.userEmail;
     if (saved != null && mounted) {
       _emailController.text = saved;
     }

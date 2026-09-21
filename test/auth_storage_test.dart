@@ -41,7 +41,7 @@ void main() {
 
     expect(await storage.token, 'jwt-1');
     expect(await storage.isAuthenticated, isTrue);
-    expect(await storage.email, 'Student@Example.com');
+    expect(await storage.userEmail, 'Student@Example.com');
   });
 
   test('login 401 -> AuthException', () async {
