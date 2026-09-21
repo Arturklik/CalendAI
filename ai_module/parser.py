@@ -18,7 +18,7 @@ import os
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -61,8 +61,18 @@ SYSTEM_PROMPT = """\
 
 Правила:
 - Если время начала/конца занятия указано явно — используй его, а не сетку звонков.
-- Дату занятий и часовой пояс задаёт пользователь. Все start_time и end_time
-  формируй как ISO 8601 с часовым поясом, например "2026-09-08T09:00:00+07:00".
+- Часовой пояс задаёт пользователь. Все start_time и end_time формируй как
+  ISO 8601 с часовым поясом, например "2026-09-08T09:00:00+07:00".
+- Дату каждого занятия определяй по информации из самого расписания
+  относительно опорной даты (дня отправки сообщения):
+  * явная дата («21 сентября», «21.09», «2026-09-21») — используй её;
+    если год не указан, бери год опорной даты;
+  * день недели («Понедельник», «Пн», «СР») — возьми ближайшую дату с этим
+    днём недели, начиная с опорной даты (если опорная дата — понедельник,
+    а расписание на понедельник, то дата — сама опорная дата);
+  * несколько дней недели в одном расписании (например, неделя Пн–Пт) —
+    каждое занятие получает дату своего дня недели;
+  * если в расписании нет ни дат, ни дней недели — используй опорную дату.
 - event_type — строго одно из: "lecture", "practice", "lab", "exam", "other".
   Сокращения: лк/лекция → lecture; пр/пз/практика/семинар → practice;
   лаб/лр/лабораторная → lab; экз/экзамен/зачёт → exam; прочее → other.
@@ -106,12 +116,12 @@ class ScheduleParser:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
         *,
         timeout: float = 120.0,
-        client: Optional[OpenAI] = None,
+        client: OpenAI | None = None,
     ) -> None:
         load_dotenv()
         self.api_key = (
@@ -137,11 +147,15 @@ class ScheduleParser:
 
     def parse_image(
         self,
-        image_path: Union[str, Path],
-        target_date: Union[datetime, date],
+        image_path: str | Path,
+        base_date: datetime | date,
         timezone_offset: str = DEFAULT_TIMEZONE_OFFSET,
     ) -> ScheduleParseResponse:
-        """Распознаёт расписание с изображения (скриншот/фото)."""
+        """Распознаёт расписание с изображения (скриншот/фото).
+
+        `base_date` — опорная дата (день отправки сообщения): от неё
+        вычисляются даты занятий, если в расписании указан день недели.
+        """
         path = Path(image_path)
         if not path.is_file():
             raise FileNotFoundError(f"Изображение не найдено: {path}")
@@ -152,7 +166,7 @@ class ScheduleParser:
 
         image_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
         content: list[dict[str, Any]] = [
-            {"type": "text", "text": self._user_prompt(target_date, timezone_offset)},
+            {"type": "text", "text": self._user_prompt(base_date, timezone_offset)},
             {
                 "type": "image_url",
                 "image_url": {
@@ -166,10 +180,14 @@ class ScheduleParser:
     def parse_text(
         self,
         text: str,
-        target_date: Union[datetime, date],
+        base_date: datetime | date,
         timezone_offset: str = DEFAULT_TIMEZONE_OFFSET,
     ) -> ScheduleParseResponse:
-        """Распознаёт расписание из текста (например, пересланного сообщения)."""
+        """Распознаёт расписание из текста (например, пересланного сообщения).
+
+        `base_date` — опорная дата (день отправки сообщения): от неё
+        вычисляются даты занятий, если в расписании указан день недели.
+        """
         if not text or not text.strip():
             raise ValueError("Пустой текст расписания")
         self._validate_tz(timezone_offset)
@@ -178,7 +196,7 @@ class ScheduleParser:
             {
                 "type": "text",
                 "text": (
-                    self._user_prompt(target_date, timezone_offset)
+                    self._user_prompt(base_date, timezone_offset)
                     + "\n\nТекст расписания:\n"
                     + text.strip()
                 ),
@@ -228,13 +246,16 @@ class ScheduleParser:
 
     @staticmethod
     def _user_prompt(
-        target_date: Union[datetime, date], timezone_offset: str
+        base_date: datetime | date, timezone_offset: str
     ) -> str:
-        weekday = _WEEKDAYS_RU[target_date.weekday()]
+        weekday = _WEEKDAYS_RU[base_date.weekday()]
         return (
-            f"Дата занятий: {target_date:%Y-%m-%d} ({weekday}). "
+            f"Опорная дата (день отправки сообщения): {base_date:%Y-%m-%d} ({weekday}). "
             f"Часовой пояс: {timezone_offset}. "
-            "Распознай все занятия этого дня."
+            "Определи дату каждого занятия по самому расписанию: явная дата — "
+            "используй её; день недели — ближайшая дата с этим днём недели, "
+            "начиная с опорной; если ни дат, ни дней недели нет — опорная дата. "
+            "Распознай все занятия."
         )
 
     @staticmethod

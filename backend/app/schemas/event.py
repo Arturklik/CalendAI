@@ -53,7 +53,7 @@ class EventBase(BaseModel):
         return _to_utc(value)
 
     @model_validator(mode="after")
-    def end_after_start(self) -> "EventBase":
+    def end_after_start(self) -> EventBase:
         if self.end_time <= self.start_time:
             raise ValueError("end_time must be after start_time")
         return self

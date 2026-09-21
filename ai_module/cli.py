@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
-from typing import Optional
+from datetime import date
 
 try:  # пакетный импорт (python -m ai_module.cli)
     from .models import EventType, ScheduleParseResponse
@@ -88,7 +87,7 @@ def _print_plain(response: ScheduleParseResponse) -> None:
         print(fmt(row))
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="calendai-parse",
         description="Распознавание расписания CalendAI через OpenAI-совместимый Vision API",
@@ -96,7 +95,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--image", metavar="PATH", help="путь к изображению расписания")
     source.add_argument("--text", metavar="TEXT", help="текст расписания")
-    ap.add_argument("--date", required=True, metavar="YYYY-MM-DD", help="дата занятий")
+    ap.add_argument(
+        "--date",
+        required=True,
+        metavar="YYYY-MM-DD",
+        help="опорная дата (день отправки сообщения)",
+    )
     ap.add_argument(
         "--tz",
         default=DEFAULT_TIMEZONE_OFFSET,
@@ -106,7 +110,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        target_date = datetime.strptime(args.date, "%Y-%m-%d")
+        base_date = date.fromisoformat(args.date)
     except ValueError:
         print(
             f"Ошибка: некорректная дата {args.date!r}, ожидается формат YYYY-MM-DD",
@@ -117,9 +121,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         parser = ScheduleParser()
         if args.image:
-            response = parser.parse_image(args.image, target_date, args.tz)
+            response = parser.parse_image(args.image, base_date, args.tz)
         else:
-            response = parser.parse_text(args.text, target_date, args.tz)
+            response = parser.parse_text(args.text, base_date, args.tz)
     except Exception as exc:  # сеть/авторизация/валидация — единообразно в stderr
         print(f"Ошибка распознавания: {exc}", file=sys.stderr)
         return 1

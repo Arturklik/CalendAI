@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import date
 
-from ai_module import ScheduleParseResponse
 from fastapi import (
     APIRouter,
     Depends,
@@ -19,6 +18,8 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field
+
+from ai_module import ScheduleParseResponse
 
 from ..models.user import User
 from ..services import ai_service
@@ -33,7 +34,9 @@ class ParseTextRequest(BaseModel):
     """Запрос на распознавание расписания из текста."""
 
     text: str = Field(min_length=1, max_length=20_000)
-    target_date: date
+    # Опорная дата (день отправки сообщения): от неё вычисляются даты
+    # занятий, если в расписании указан день недели, а не дата.
+    base_date: date
     timezone_offset: str = "+07:00"
 
 
@@ -60,7 +63,10 @@ def _map_ai_errors(exc: Exception) -> HTTPException:
 @router.post("/parse-image", response_model=ScheduleParseResponse)
 async def parse_image(
     file: UploadFile = File(..., description="Скриншот/фото расписания"),
-    target_date: date = Query(..., description="Дата занятий (YYYY-MM-DD)"),
+    base_date: date = Query(
+        ...,
+        description="Опорная дата — день отправки сообщения (YYYY-MM-DD)",
+    ),
     tz: str = Query(default="+07:00", description="Часовой пояс ±HH:MM"),
     current_user: User = Depends(get_current_user),
 ) -> ScheduleParseResponse:
@@ -78,7 +84,7 @@ async def parse_image(
         )
     try:
         return await ai_service.parse_schedule_image(
-            image_bytes, file.content_type, target_date, tz
+            image_bytes, file.content_type, base_date, tz
         )
     except Exception as exc:
         raise _map_ai_errors(exc) from exc
@@ -92,7 +98,7 @@ async def parse_text(
     """Распознаёт расписание из текста (пересланное сообщение и т.п.)."""
     try:
         return await ai_service.parse_schedule_text(
-            request.text, request.target_date, request.timezone_offset
+            request.text, request.base_date, request.timezone_offset
         )
     except Exception as exc:
         raise _map_ai_errors(exc) from exc

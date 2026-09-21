@@ -37,7 +37,7 @@ class User(Base):
         UTCDateTime, nullable=False, server_default=func.now()
     )
 
-    events: Mapped[list["Event"]] = relationship(
+    events: Mapped[list[Event]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,

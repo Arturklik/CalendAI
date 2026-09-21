@@ -7,7 +7,6 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -27,9 +26,9 @@ class ParsedCalendarEvent(BaseModel):
     event_type: EventType
     start_time: datetime  # ISO 8601, обязательно с часовым поясом
     end_time: datetime  # ISO 8601, обязательно с часовым поясом
-    location: Optional[str] = None
-    teacher: Optional[str] = None
-    description: Optional[str] = None
+    location: str | None = None
+    teacher: str | None = None
+    description: str | None = None
 
     @field_validator("title")
     @classmethod

@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
-from ai_module import ScheduleParseResponse, ScheduleParser
+from ai_module import ScheduleParser, ScheduleParseResponse
 
 from ..config import get_settings
 
@@ -62,10 +62,13 @@ def reset_parser() -> None:
 async def parse_schedule_image(
     image_bytes: bytes,
     content_type: str | None,
-    target_date: date,
+    base_date: date,
     timezone_offset: str,
 ) -> ScheduleParseResponse:
     """Распознаёт расписание с изображения (скриншот/фото).
+
+    `base_date` — опорная дата (день отправки сообщения) в таймзоне
+    пользователя: от неё вычисляются даты занятий по дню недели.
 
     ScheduleParser работает с путём к файлу, поэтому содержимое
     сохраняется во временный файл и удаляется после вызова.
@@ -85,7 +88,7 @@ async def parse_schedule_image(
             tmp.write(image_bytes)
             tmp_path = Path(tmp.name)
         return await asyncio.to_thread(
-            parser.parse_image, tmp_path, target_date, timezone_offset
+            parser.parse_image, tmp_path, base_date, timezone_offset
         )
     finally:
         if tmp_path is not None:
@@ -94,13 +97,17 @@ async def parse_schedule_image(
 
 async def parse_schedule_text(
     text: str,
-    target_date: date,
+    base_date: date,
     timezone_offset: str,
 ) -> ScheduleParseResponse:
-    """Распознаёт расписание из текста (пересланное сообщение и т.п.)."""
+    """Распознаёт расписание из текста (пересланное сообщение и т.п.).
+
+    `base_date` — опорная дата (день отправки сообщения) в таймзоне
+    пользователя: от неё вычисляются даты занятий по дню недели.
+    """
     parser = get_parser()
     return await asyncio.to_thread(
-        parser.parse_text, text, target_date, timezone_offset
+        parser.parse_text, text, base_date, timezone_offset
     )
 
 

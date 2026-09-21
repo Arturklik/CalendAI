@@ -15,7 +15,7 @@ from __future__ import annotations
 import io
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import CommandObject, CommandStart
@@ -51,6 +51,16 @@ TYPE_LABELS = {
     AIEventType.other: "Другое",
 }
 
+_WEEKDAYS_RU = (
+    "Понедельник", "Вторник", "Среда", "Четверг",
+    "Пятница", "Суббота", "Воскресенье",
+)
+_WEEKDAYS_SHORT_RU = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+_MONTHS_GENITIVE_RU = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
 CB_ADD_ALL = "cal_add_all"
 CB_CANCEL = "cal_cancel"
 
@@ -79,23 +89,107 @@ def _keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _format_preview(response: ScheduleParseResponse) -> str:
-    """Человекочитаемое превью распознанных занятий."""
-    lines = [f"Распознано занятий: {len(response.events)}\n"]
+def _parse_tz_offset(offset: str) -> timezone:
+    """Смещение «±HH:MM» -> timezone(timedelta)."""
+    sign = -1 if offset.startswith("-") else 1
+    hours, minutes = offset.lstrip("+-").split(":")
+    return timezone(sign * timedelta(hours=int(hours), minutes=int(minutes)))
+
+
+def _local_date(sent_at: datetime | None, tz_offset: str) -> date:
+    """Локальная дата отправки сообщения в таймзоне пользователя."""
+    moment = sent_at or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(_parse_tz_offset(tz_offset)).date()
+
+
+def _day_header(day: date, today: date) -> str:
+    """«Сегодня, 20 сентября (воскресенье)» или «Понедельник, 21 сентября»."""
+    date_part = f"{day.day} {_MONTHS_GENITIVE_RU[day.month - 1]}"
+    if day == today:
+        return f"Сегодня, {date_part} ({_WEEKDAYS_RU[day.weekday()].lower()})"
+    return f"{_WEEKDAYS_RU[day.weekday()]}, {date_part}"
+
+
+def _plural_days(count: int) -> str:
+    """«день» / «дня» / «дней» для числа дней."""
+    if 11 <= count % 100 <= 14:
+        return "дней"
+    last = count % 10
+    if last == 1:
+        return "день"
+    if 2 <= last <= 4:
+        return "дня"
+    return "дней"
+
+
+def _count_phrase(days: list[date], today: date) -> str:
+    """«на Понедельник, 21 сентября» / «на сегодня, 20 сентября» / «на 3 дня»."""
+    if len(days) == 1:
+        day = days[0]
+        if day == today:
+            return f"на сегодня, {day.day} {_MONTHS_GENITIVE_RU[day.month - 1]}"
+        return f"на {_day_header(day, today)}"
+    return f"на {len(days)} {_plural_days(len(days))}"
+
+
+def _format_days_list(days: list[date], today: date) -> str:
+    """Компактный список дней: «21 сентября, Пн», «сегодня, 20 сентября»."""
+    parts = []
+    for day in days:
+        date_part = f"{day.day} {_MONTHS_GENITIVE_RU[day.month - 1]}"
+        if day == today:
+            parts.append(f"сегодня, {date_part}")
+        else:
+            parts.append(f"{date_part}, {_WEEKDAYS_SHORT_RU[day.weekday()]}")
+    return ", ".join(parts)
+
+
+def _format_preview(
+    response: ScheduleParseResponse,
+    today: date | None = None,
+    tz_offset: str | None = None,
+) -> str:
+    """Превью распознанных занятий с группировкой по датам.
+
+    `today` — локальная дата отправки сообщения (для пометки «Сегодня»),
+    `tz_offset` — часовой пояс пользователя (по умолчанию из настроек).
+    """
+    if not response.events:
+        return "Не удалось распознать занятия."
+
+    offset = tz_offset or get_settings().bot_default_timezone
+    tz = _parse_tz_offset(offset)
+    today = today or datetime.now(tz).date()
+
+    groups: dict[date, list[ParsedCalendarEvent]] = {}
     for event in response.events:
-        type_label = TYPE_LABELS.get(event.event_type, event.event_type.value)
-        line = (
-            f"🕐 {event.start_time:%H:%M}–{event.end_time:%H:%M} "
-            f"| {type_label} | {event.title}"
-        )
-        details = []
-        if event.location:
-            details.append(f"📍 {event.location}")
-        if event.teacher:
-            details.append(f"👤 {event.teacher}")
-        if details:
-            line += "\n   " + "  ".join(details)
-        lines.append(line)
+        day = event.start_time.astimezone(tz).date()
+        groups.setdefault(day, []).append(event)
+
+    days = sorted(groups)
+    lines = [
+        f"Распознано занятий: {len(response.events)} {_count_phrase(days, today)}"
+    ]
+    for day in days:
+        lines.append("")
+        lines.append(f"📅 {_day_header(day, today)}")
+        for event in sorted(groups[day], key=lambda e: e.start_time):
+            local_start = event.start_time.astimezone(tz)
+            local_end = event.end_time.astimezone(tz)
+            type_label = TYPE_LABELS.get(event.event_type, event.event_type.value)
+            lines.append(
+                f"🕐 {local_start:%H:%M}–{local_end:%H:%M} "
+                f"| {type_label} | {event.title}"
+            )
+            details = []
+            if event.location:
+                details.append(f"📍 {event.location}")
+            if event.teacher:
+                details.append(f"👤 {event.teacher}")
+            if details:
+                lines.append("   " + "  ".join(details))
     return "\n".join(lines)
 
 
@@ -107,7 +201,10 @@ async def _get_user_by_telegram_id(telegram_id: int) -> User | None:
 
 
 async def _process_schedule(
-    message: Message, state: FSMContext, response: ScheduleParseResponse
+    message: Message,
+    state: FSMContext,
+    response: ScheduleParseResponse,
+    base_date: date,
 ) -> None:
     """Общий финал фото/войс-хэндлеров: превью + кнопки подтверждения."""
     if not response.events:
@@ -120,7 +217,10 @@ async def _process_schedule(
     await state.update_data(
         events=[e.model_dump(mode="json") for e in response.events]
     )
-    await message.answer(_format_preview(response), reply_markup=_keyboard())
+    await message.answer(
+        _format_preview(response, today=base_date),
+        reply_markup=_keyboard(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -192,23 +292,27 @@ async def handle_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         )
         return
 
+    settings = get_settings()
+    # Опорная дата — локальный день отправки сообщения (а не UTC-дата),
+    # от неё модель отсчитывает дни недели из расписания.
+    base_date = _local_date(message.date, settings.bot_default_timezone)
+
     await message.answer("🔍 Распознаю расписание с фото…")
     try:
         photo = message.photo[-1]  # максимальное доступное разрешение
         buffer = io.BytesIO()
         await bot.download(photo.file_id, destination=buffer)
-        settings = get_settings()
         response = await ai_service.parse_schedule_image(
             buffer.getvalue(),
             "image/jpeg",
-            (message.date or datetime.now(timezone.utc)).date(),
+            base_date,
             settings.bot_default_timezone,
         )
     except Exception as exc:
         logger.exception("Ошибка распознавания фото")
         await message.answer(f"❌ Ошибка распознавания: {exc}")
         return
-    await _process_schedule(message, state, response)
+    await _process_schedule(message, state, response, base_date)
 
 
 @router.message(F.voice)
@@ -222,24 +326,26 @@ async def handle_voice(message: Message, state: FSMContext, bot: Bot) -> None:
         )
         return
 
+    settings = get_settings()
+    base_date = _local_date(message.date, settings.bot_default_timezone)
+
     await message.answer("🎙 Распознаю голосовое сообщение…")
     try:
         buffer = io.BytesIO()
         await bot.download(message.voice.file_id, destination=buffer)
-        settings = get_settings()
         transcript = await ai_service.transcribe_audio(
             buffer.getvalue(), filename="voice.oga"
         )
         response = await ai_service.parse_schedule_text(
             transcript,
-            (message.date or datetime.now(timezone.utc)).date(),
+            base_date,
             settings.bot_default_timezone,
         )
     except Exception as exc:
         logger.exception("Ошибка обработки голосового сообщения")
         await message.answer(f"❌ Ошибка распознавания: {exc}")
         return
-    await _process_schedule(message, state, response)
+    await _process_schedule(message, state, response, base_date)
 
 
 @router.callback_query(F.data == CB_ADD_ALL, AddEventsState.confirm)
@@ -261,6 +367,12 @@ async def cb_add_all(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Список событий пуст.", show_alert=True)
         await state.clear()
         return
+
+    # Дни, на которые добавлены занятия (в таймзоне пользователя).
+    settings = get_settings()
+    tz = _parse_tz_offset(settings.bot_default_timezone)
+    today = datetime.now(tz).date()
+    days = sorted({parsed.start_time.astimezone(tz).date() for parsed in events})
 
     now = datetime.now(timezone.utc)
     async with async_session_factory() as session:
@@ -286,7 +398,8 @@ async def cb_add_all(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if callback.message is not None:
         await callback.message.edit_text(
-            f"✅ Добавлено занятий: {len(events)}.\n"
+            f"✅ Добавлено занятий: {len(events)} "
+            f"(на {_format_days_list(days, today)}).\n"
             "Нажмите «Обновить» в приложении — они появятся в календаре."
         )
     await callback.answer()

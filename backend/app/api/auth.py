@@ -63,7 +63,7 @@ async def login(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Неверный формат запроса",
-            )
+            ) from None
 
     if not email or not password:
         raise HTTPException(

@@ -26,6 +26,8 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key")
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
+from app.database import Base, get_db  # noqa: E402
+from app.main import app  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
@@ -33,9 +35,6 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     create_async_engine,
 )
 from sqlalchemy.pool import StaticPool  # noqa: E402
-
-from app.database import Base, get_db  # noqa: E402
-from app.main import app  # noqa: E402
 
 
 @pytest_asyncio.fixture

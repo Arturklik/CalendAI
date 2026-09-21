@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -28,6 +29,9 @@ from sqlalchemy.types import Uuid
 
 from ..database import Base
 from ..db_types import UTCDateTime
+
+if TYPE_CHECKING:  # pragma: no cover - только для аннотаций
+    from .user import User
 
 EVENT_TYPE_VALUES = ("lecture", "practice", "lab", "exam", "other")
 
@@ -64,7 +68,7 @@ class Event(Base):
         Boolean, nullable=False, server_default="false", default=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="events")
+    user: Mapped[User] = relationship(back_populates="events")
 
     def __repr__(self) -> str:  # pragma: no cover - отладочный метод
         return f"Event(id={self.id!s}, title={self.title!r})"
