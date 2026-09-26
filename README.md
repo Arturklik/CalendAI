@@ -5,12 +5,13 @@ or voice messages) into calendar events via external OpenAI-compatible AI APIs
 (Vision / Whisper), persists them locally in SQLite, and synchronizes them with
 a FastAPI backend.
 
-The monorepo contains three components:
+The monorepo contains four components:
 
 | Component | Stack | Responsibility |
 |---|---|---|
 | **Mobile client** (`lib/`) | Flutter (Android / iOS), SQLite (sqflite) | Offline-first calendar, local event store, differential sync |
 | **Backend** (`backend/`) | FastAPI (async), PostgreSQL, SQLAlchemy 2.0, aiogram 3 | REST API, JWT auth, LWW sync, Telegram bot |
+| **Web dashboard** (`frontend/`) | Vite, React, TypeScript, Tailwind CSS | Schedule management, AI timetable import, account settings |
 | **AI module** (`ai_module/`) | Python 3.10+, Pydantic v2, OpenAI SDK | Timetable recognition via OpenAI-compatible Vision API |
 
 ## Mobile client
@@ -83,6 +84,25 @@ docker compose -f backend/docker-compose.yml up --build   # from the repo root
 
 Local setup (SQLite/PostgreSQL), tests, and linting: see
 [`backend/README.md`](backend/README.md).
+
+## Web dashboard
+
+The React dashboard provides month, week, and day calendar views, event
+management, image and voice schedule imports, and account settings. Its Vite
+development server proxies `/api` requests to the local backend at
+`http://localhost:8000`.
+
+Start the backend first (see [`backend/README.md`](backend/README.md)), then run
+the dashboard from the repository root:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite prints the local dashboard URL after startup. To create a production build,
+run `npm run build` from `frontend/`.
 
 ## AI module
 

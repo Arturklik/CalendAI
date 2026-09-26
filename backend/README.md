@@ -104,7 +104,8 @@ cd ..                           # from the repository root
 ruff check backend ai_module    # linter (config: ruff.toml at the repo root)
 ```
 
-Test coverage: registration/login/JWT, event CRUD, initial and incremental
+Test coverage: registration/login/JWT and password changes, event CRUD and batch
+creation, image/text/voice AI parsing routes, initial and incremental
 synchronization, LWW conflict resolution, soft-delete propagation,
 `ScheduleParser` prompts (base date), and Telegram bot preview formatting
 (per-day grouping).
@@ -116,11 +117,14 @@ synchronization, LWW conflict resolution, soft-delete propagation,
 | POST | `/auth/register` | Registration (201 / 409) |
 | POST | `/auth/login` | Login, issues a JWT Bearer token |
 | GET | `/auth/me` | Current user profile |
+| POST | `/auth/change-password` | Verify the current password and set a new one |
 | POST | `/auth/telegram-link-token` | Token for `/start <token>` in the bot |
 | GET/POST | `/events` | List (with filters) / create |
+| POST | `/events/batch` | Create multiple events in one transaction |
 | GET/PATCH/DELETE | `/events/{id}` | Read / partial update / soft delete |
 | POST | `/sync` | Differential synchronization (LWW) |
 | POST | `/ai/parse-image` | Timetable recognition from an image |
+| POST | `/ai/parse-voice` | Audio transcription and timetable recognition |
 | POST | `/ai/parse-text` | Timetable recognition from text |
 
 AI endpoints accept `base_date` — the **reference date** (the day the message
