@@ -9,6 +9,7 @@ from ..config import get_settings
 from ..database import get_db
 from ..models.user import User
 from ..schemas.auth import (
+    ChangePasswordRequest,
     TelegramLinkToken,
     Token,
     UserCreate,
@@ -85,6 +86,24 @@ async def login(
 async def me(current_user: User = Depends(get_current_user)) -> User:
     """Профиль текущего пользователя."""
     return current_user
+
+
+@router.post("/change-password")
+async def change_password(
+    data: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Проверяет текущий пароль и обновляет его хеш."""
+    changed = await auth_service.change_password(
+        db, current_user, data.current_password, data.new_password
+    )
+    if not changed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Текущий пароль указан неверно",
+        )
+    return {"status": "ok", "message": "Password changed successfully"}
 
 
 @router.post("/telegram-link-token", response_model=TelegramLinkToken)

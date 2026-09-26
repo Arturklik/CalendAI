@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -98,6 +99,65 @@ async def create_event(
     await db.commit()
     await db.refresh(event)
     return event
+
+
+@router.post(
+    "/batch",
+    response_model=list[EventResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_events_batch(
+    events: list[EventCreate],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Event]:
+    """Создаёт набор событий одной транзакцией."""
+    event_ids = [data.id or uuid.uuid4() for data in events]
+    if len(set(event_ids)) != len(event_ids):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="В запросе повторяются id событий",
+        )
+
+    if event_ids:
+        existing_ids = await db.scalars(
+            select(Event.id).where(Event.id.in_(event_ids))
+        )
+        if existing_ids.first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Событие с таким id уже существует",
+            )
+
+    updated_at = _touch()
+    created_events = [
+        Event(
+            id=event_id,
+            user_id=current_user.id,
+            title=data.title,
+            event_type=data.event_type.value,
+            start_time=data.start_time,
+            end_time=data.end_time,
+            location=data.location,
+            teacher=data.teacher,
+            description=data.description,
+            recurrence_rule=data.recurrence_rule,
+            updated_at=updated_at,
+            is_deleted=False,
+        )
+        for data, event_id in zip(events, event_ids, strict=True)
+    ]
+    db.add_all(created_events)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Не удалось создать события с указанными id",
+        ) from exc
+
+    return created_events
 
 
 @router.get("/{event_id}", response_model=EventResponse)

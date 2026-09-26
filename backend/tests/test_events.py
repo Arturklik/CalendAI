@@ -58,6 +58,48 @@ async def test_create_event_end_before_start_rejected(
     assert response.status_code == 422
 
 
+async def test_create_events_batch(
+    client: AsyncClient,
+    register_user: Callable[[str, str], Awaitable[dict[str, str]]],
+) -> None:
+    headers = await register_user("batch-events@example.com")
+    response = await client.post(
+        "/api/v1/events/batch",
+        json=[_event_payload(), _event_payload(title="Лабораторная работа")],
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert len(body) == 2
+    assert [event["title"] for event in body] == [
+        "Лекция: Математический анализ",
+        "Лабораторная работа",
+    ]
+    assert all(event["updated_at"] for event in body)
+    assert body[0]["updated_at"] == body[1]["updated_at"]
+
+
+async def test_create_events_batch_rejects_duplicate_ids(
+    client: AsyncClient,
+    register_user: Callable[[str, str], Awaitable[dict[str, str]]],
+) -> None:
+    headers = await register_user("batch-duplicate@example.com")
+    duplicate_id = str(uuid.uuid4())
+    response = await client.post(
+        "/api/v1/events/batch",
+        json=[
+            _event_payload(id=duplicate_id),
+            _event_payload(id=duplicate_id, title="Дубликат"),
+        ],
+        headers=headers,
+    )
+    assert response.status_code == 409
+
+    listed = await client.get("/api/v1/events", headers=headers)
+    assert listed.json() == []
+
+
 async def test_list_events_only_own(
     client: AsyncClient,
     register_user: Callable[[str, str], Awaitable[dict[str, str]]],

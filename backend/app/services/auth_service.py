@@ -114,3 +114,18 @@ async def authenticate_user(
     if user is None or not verify_password(password, user.password_hash):
         return None
     return user
+
+
+async def change_password(
+    db: AsyncSession,
+    user: User,
+    current_password: str,
+    new_password: str,
+) -> bool:
+    """Проверяет текущий пароль и сохраняет новый хеш."""
+    if not verify_password(current_password, user.password_hash):
+        return False
+
+    user.password_hash = hash_password(new_password)
+    await db.commit()
+    return True

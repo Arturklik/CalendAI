@@ -80,6 +80,58 @@ async def test_me_with_garbage_token_unauthorized(client: AsyncClient) -> None:
     assert response.status_code == 401
 
 
+async def test_change_password_success(
+    client: AsyncClient,
+    register_user,
+) -> None:
+    headers = await register_user("change-password@example.com", "secret123")
+    changed = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "secret123", "new_password": "new-secret456"},
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json() == {
+        "status": "ok",
+        "message": "Password changed successfully",
+    }
+
+    old_password = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "change-password@example.com", "password": "secret123"},
+    )
+    new_password = await client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "change-password@example.com",
+            "password": "new-secret456",
+        },
+    )
+    assert old_password.status_code == 401
+    assert new_password.status_code == 200
+
+
+async def test_change_password_rejects_incorrect_current_password(
+    client: AsyncClient,
+    register_user,
+) -> None:
+    headers = await register_user("change-password-wrong@example.com")
+    response = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "wrong-pass", "new_password": "new-secret456"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
+async def test_change_password_requires_auth(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "secret123", "new_password": "new-secret456"},
+    )
+    assert response.status_code == 401
+
+
 async def test_telegram_link_token_requires_auth(client: AsyncClient) -> None:
     anon = await client.post("/api/v1/auth/telegram-link-token")
     assert anon.status_code == 401
