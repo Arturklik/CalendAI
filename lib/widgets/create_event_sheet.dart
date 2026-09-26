@@ -90,101 +90,111 @@ class _CreateEventSheetState extends State<CreateEventSheet> {
     final dateLabel = '${date.day.toString().padLeft(2, '0')}.'
         '${date.month.toString().padLeft(2, '0')}.${date.year}';
 
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Новое занятие — $dateLabel',
-            style: theme.textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _titleController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Название',
-              border: OutlineInputBorder(),
+    return SingleChildScrollView(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Новое занятие — $dateLabel',
+              style: theme.textTheme.titleMedium,
             ),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<EventType>(
-            initialValue: _type,
-            decoration: const InputDecoration(
-              labelText: 'Тип',
-              border: OutlineInputBorder(),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _titleController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Название',
+                border: OutlineInputBorder(),
+              ),
             ),
-            items: EventType.values
-                .map(
-                  (type) => DropdownMenuItem(
-                    value: type,
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.circle,
-                          size: 10,
-                          color: eventTypeColor(type),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(eventTypeLabel(type)),
-                      ],
+            const SizedBox(height: 12),
+            DropdownButtonFormField<EventType>(
+              initialValue: _type,
+              decoration: const InputDecoration(
+                labelText: 'Тип',
+                border: OutlineInputBorder(),
+              ),
+              items: EventType.values
+                  .map(
+                    (type) => DropdownMenuItem(
+                      value: type,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.circle,
+                            size: 10,
+                            color: eventTypeColor(type),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(eventTypeLabel(type)),
+                        ],
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => _type = value);
+              },
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pickTime(isStart: true),
+                    icon: const Icon(Icons.schedule),
+                    label: Text(
+                      'Начало: ${_fmtTimeOfDay(_startTime)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                )
-                .toList(),
-            onChanged: (value) {
-              if (value != null) setState(() => _type = value);
-            },
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _pickTime(isStart: true),
-                  icon: const Icon(Icons.schedule),
-                  label: Text('Начало: ${_fmtTimeOfDay(_startTime)}'),
                 ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pickTime(isStart: false),
+                    icon: const Icon(Icons.schedule),
+                    label: Text(
+                      'Конец: ${_fmtTimeOfDay(_endTime)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _locationController,
+              decoration: const InputDecoration(
+                labelText: 'Аудитория',
+                border: OutlineInputBorder(),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _pickTime(isStart: false),
-                  icon: const Icon(Icons.schedule),
-                  label: Text('Конец: ${_fmtTimeOfDay(_endTime)}'),
-                ),
+            ),
+            if (_errorText != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _errorText!,
+                style: TextStyle(color: theme.colorScheme.error),
               ),
             ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _locationController,
-            decoration: const InputDecoration(
-              labelText: 'Аудитория',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          if (_errorText != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _errorText!,
-              style: TextStyle(color: theme.colorScheme.error),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _save,
+              icon: const Icon(Icons.check),
+              label: const Text('Сохранить'),
             ),
           ],
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _save,
-            icon: const Icon(Icons.check),
-            label: const Text('Сохранить'),
-          ),
-        ],
+        ),
       ),
     );
   }

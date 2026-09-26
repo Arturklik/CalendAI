@@ -60,7 +60,7 @@ class HttpSyncRepository implements SyncRepository {
             body: jsonEncode(payload),
           )
           .timeout(_timeout);
-    } on SocketException {
+    } on IOException {
       throw const NetworkException();
     } on http.ClientException {
       throw const NetworkException();

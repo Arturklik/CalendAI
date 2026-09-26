@@ -1,10 +1,15 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../database/app_database.dart';
 import '../models/event.dart';
 import '../repositories/http_sync_repository.dart';
 import '../repositories/sync_repository.dart';
 import '../services/api_exceptions.dart';
+import '../services/app_logger.dart';
 import '../services/auth_storage.dart';
 import '../theme/event_type_style.dart';
 import '../utils/day_events.dart';
@@ -12,26 +17,50 @@ import '../widgets/auth_dialog.dart';
 import '../widgets/create_event_sheet.dart';
 import '../widgets/event_card.dart';
 import '../widgets/event_details_sheet.dart';
+import '../widgets/error_log_dialog.dart';
 
 const List<String> _monthNames = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
 ];
 
 /// Родительный падеж для заголовка дня («20 сентября»).
 const List<String> _monthNamesGenitive = [
-  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
 ];
 
 const List<String> _weekdayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 const List<String> _weekdayFullNames = [
-  'понедельник', 'вторник', 'среда', 'четверг',
-  'пятница', 'суббота', 'воскресенье',
+  'понедельник',
+  'вторник',
+  'среда',
+  'четверг',
+  'пятница',
+  'суббота',
+  'воскресенье',
 ];
-
-
 
 /// Базовый экран календаря: месячная сетка + список занятий на выбранный день.
 ///
@@ -50,10 +79,9 @@ class CalendarScreen extends StatefulWidget {
 class _CalendarScreenState extends State<CalendarScreen> {
   final AppDatabase _db = AppDatabase.instance;
 
-  late final AuthStorage _authStorage =
-      widget.authStorage ?? AuthStorage();
-  late final SyncRepository _syncRepository = widget.syncRepository ??
-      HttpSyncRepository(authStorage: _authStorage);
+  late final AuthStorage _authStorage = widget.authStorage ?? AuthStorage();
+  late final SyncRepository _syncRepository =
+      widget.syncRepository ?? HttpSyncRepository(authStorage: _authStorage);
 
   late DateTime _focusedMonth;
   late DateTime _selectedDate;
@@ -62,6 +90,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
   bool _isAuthenticated = false;
   String? _userEmail;
   DateTime _lastSync = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  int _sessionGeneration = 0;
+  int _syncRunId = 0;
 
   @override
   void initState() {
@@ -84,11 +114,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
     });
   }
 
-  Future<void> _loadMonthEvents() async {
+  Future<void> _loadMonthEvents({int? expectedSession}) async {
     final start = DateTime(_focusedMonth.year, _focusedMonth.month);
     final end = DateTime(_focusedMonth.year, _focusedMonth.month + 1);
     final events = await _db.getEventsInRange(start, end);
-    if (mounted) setState(() => _monthEvents = events);
+    if (!mounted ||
+        (expectedSession != null && expectedSession != _sessionGeneration)) {
+      return;
+    }
+    setState(() => _monthEvents = events);
   }
 
   void _shiftMonth(int delta) {
@@ -123,35 +157,124 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Future<void> _sync() async {
     if (_syncing) return;
 
-    if (!await _authStorage.isAuthenticated) {
-      if (!mounted) return;
-      final authenticated = await AuthDialog.show(context, _authStorage);
-      if (!authenticated) return;
-      await _refreshAuthState();
-    }
-
+    // Lock synchronously before the first await so rapid taps cannot start
+    // multiple authentication/sync flows.
+    final runId = ++_syncRunId;
+    final session = _sessionGeneration;
     setState(() => _syncing = true);
+    AppLogger.instance.info('Synchronization started');
     try {
+      if (!await _authStorage.isAuthenticated) {
+        if (!_isSyncCurrent(session, runId)) return;
+        if (!mounted) return;
+        final authenticated = await AuthDialog.show(context, _authStorage);
+        if (!authenticated || !_isSyncCurrent(session, runId)) return;
+        await _refreshAuthState();
+      }
+
+      if (!_isSyncCurrent(session, runId)) return;
       final localChanges = await _db.getPendingChanges(_lastSync);
-      final remoteEvents =
-          await _syncRepository.sync(_lastSync, localChanges);
+      if (!_isSyncCurrent(session, runId)) return;
+      final remoteEvents = await _syncRepository.sync(_lastSync, localChanges);
+      // Sign-out/account switch invalidates the in-flight response. Never
+      // write events from the previous account back into the cleared database.
+      if (!_isSyncCurrent(session, runId)) return;
       for (final event in remoteEvents) {
+        if (!_isSyncCurrent(session, runId)) return;
         // Сохраняем серверный updated_at без перезаписи клиентским временем,
         // иначе скачанные события снова попадут в local_changes.
         await _db.applyRemoteEvent(event);
       }
+      if (!_isSyncCurrent(session, runId)) return;
       _lastSync = DateTime.now().toUtc();
-      await _loadMonthEvents();
-      if (!mounted) return;
+      await _loadMonthEvents(expectedSession: session);
+      if (!_isSyncCurrent(session, runId)) return;
+      AppLogger.instance.info(
+        'Synchronization completed: received ${remoteEvents.length}, '
+        'sent ${localChanges.length}',
+      );
       _showSnackBar(
         'Синхронизация завершена: получено — ${remoteEvents.length}, '
         'отправлено — ${localChanges.length}',
       );
-    } on ApiException catch (exception) {
-      if (!mounted) return;
+    } on NetworkException catch (error, stackTrace) {
+      _reportSyncFailure(
+        'Network unavailable during synchronization',
+        error,
+        stackTrace,
+        session,
+        runId,
+        'Нет связи с сервером. Проверьте подключение',
+      );
+    } on SocketException catch (error, stackTrace) {
+      _reportSyncFailure(
+        'Socket error during synchronization',
+        error,
+        stackTrace,
+        session,
+        runId,
+        'Нет связи с сервером. Проверьте подключение',
+      );
+    } on TimeoutException catch (error, stackTrace) {
+      _reportSyncFailure(
+        'Synchronization timed out',
+        error,
+        stackTrace,
+        session,
+        runId,
+        'Нет связи с сервером. Проверьте подключение',
+      );
+    } on http.ClientException catch (error, stackTrace) {
+      _reportSyncFailure(
+        'HTTP client error during synchronization',
+        error,
+        stackTrace,
+        session,
+        runId,
+        'Нет связи с сервером. Проверьте подключение',
+      );
+    } on ApiException catch (exception, stackTrace) {
+      AppLogger.instance.error(
+        'Synchronization failed',
+        error: exception,
+        stackTrace: stackTrace,
+      );
+      if (!_isSyncCurrent(session, runId)) return;
       _showSnackBar(exception.message, isError: true);
+    } catch (error, stackTrace) {
+      _reportSyncFailure(
+        'Unexpected synchronization error',
+        error,
+        stackTrace,
+        session,
+        runId,
+        'Не удалось синхронизировать данные. Попробуйте ещё раз.',
+      );
     } finally {
-      if (mounted) setState(() => _syncing = false);
+      if (mounted && runId == _syncRunId) {
+        setState(() => _syncing = false);
+      }
+    }
+  }
+
+  bool _isSyncCurrent(int session, int runId) =>
+      mounted && session == _sessionGeneration && runId == _syncRunId;
+
+  void _reportSyncFailure(
+    String logMessage,
+    Object error,
+    StackTrace stackTrace,
+    int session,
+    int runId,
+    String userMessage,
+  ) {
+    AppLogger.instance.error(
+      logMessage,
+      error: error,
+      stackTrace: stackTrace,
+    );
+    if (_isSyncCurrent(session, runId)) {
+      _showSnackBar(userMessage, isError: true);
     }
   }
 
@@ -200,16 +323,57 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
     if (confirmed != true) return;
 
-    await _authStorage.clear();
-    await _db.clearAll();
+    // Invalidate any request already in flight before clearing the database.
+    _sessionGeneration++;
+    _syncRunId++;
+    Object? clearError;
+    try {
+      await _authStorage.clear();
+    } catch (error, stackTrace) {
+      clearError = error;
+      AppLogger.instance.error(
+        'Failed to clear authentication on sign-out',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+    try {
+      await _db.clearAll();
+    } catch (error, stackTrace) {
+      clearError ??= error;
+      AppLogger.instance.error(
+        'Failed to clear local database on sign-out',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
     _lastSync = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
-    await _loadMonthEvents();
+    try {
+      await _loadMonthEvents(expectedSession: _sessionGeneration);
+    } catch (error, stackTrace) {
+      clearError ??= error;
+      AppLogger.instance.error(
+        'Failed to reload local events after sign-out',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     if (!mounted) return;
     setState(() {
       _isAuthenticated = false;
       _userEmail = null;
+      _syncing = false;
     });
-    _showSnackBar('Вы вышли из аккаунта');
+    if (clearError == null) {
+      AppLogger.instance.info('User signed out; local event database cleared');
+      _showSnackBar('Вы вышли из аккаунта');
+    } else {
+      _showSnackBar(
+        'Вы вышли, но не удалось полностью очистить локальные данные',
+        isError: true,
+      );
+    }
   }
 
   /// Модальный просмотр деталей занятия; удаление — по кнопке в шторке.
@@ -257,6 +421,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
               onPressed: _sync,
             ),
           _buildAccountButton(),
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: 'Журнал ошибок',
+            onPressed: () => showAppErrorLogDialog(context),
+          ),
         ],
       ),
       body: Column(
@@ -405,8 +574,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
         final day = index - leadingEmpty + 1;
         final date = DateTime(_focusedMonth.year, _focusedMonth.month, day);
         final isSelected = date == _selectedDate;
-        final isToday =
-            date.year == now.year && date.month == now.month && date.day == now.day;
+        final isToday = date.year == now.year &&
+            date.month == now.month &&
+            date.day == now.day;
         final indicatorColor = dayIndicatorColors[day];
         final colorScheme = Theme.of(context).colorScheme;
 
@@ -440,9 +610,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                       size: 5,
                       // На активном фоне точка — контрастная (onPrimary),
                       // в остальных днях — цвет типа занятия.
-                      color: isSelected
-                          ? colorScheme.onPrimary
-                          : indicatorColor,
+                      color:
+                          isSelected ? colorScheme.onPrimary : indicatorColor,
                     ),
                 ],
               ),

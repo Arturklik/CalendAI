@@ -45,11 +45,15 @@ class EventCard extends StatelessWidget {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                           const SizedBox(width: 4),
-                          Text(
-                            formatTimeRange(event.startTime, event.endTime),
-                            style: theme.textTheme.labelLarge,
+                          Expanded(
+                            child: Text(
+                              formatTimeRange(event.startTime, event.endTime),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelLarge,
+                            ),
                           ),
-                          const Spacer(),
+                          const SizedBox(width: 8),
                           Chip(
                             label: Text(
                               eventTypeLabel(event.eventType),
@@ -66,15 +70,16 @@ class EventCard extends StatelessWidget {
                       const SizedBox(height: 6),
                       Text(
                         event.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       if (hasDetails) ...[
                         const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 16,
-                          runSpacing: 4,
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             if (event.location != null)
                               _IconText(
@@ -116,10 +121,11 @@ class _IconText extends StatelessWidget {
       children: [
         Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
         const SizedBox(width: 4),
-        Flexible(
+        Expanded(
           child: Text(
             text,
             style: theme.textTheme.bodySmall,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
