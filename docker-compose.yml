@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-calendai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-calendai}
+      POSTGRES_DB: ${POSTGRES_DB:-calendai}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-calendai} -d ${POSTGRES_DB:-calendai}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-calendai}:${POSTGRES_PASSWORD:-calendai}@db:5432/${POSTGRES_DB:-calendai}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CALENDAI_API_KEY: ${CALENDAI_API_KEY:-}
+      CALENDAI_BASE_URL: ${CALENDAI_BASE_URL:-https://api.deepseek.com}
+      CALENDAI_MODEL: ${CALENDAI_MODEL:-deepseek-chat}
+      CALENDAI_FALLBACK_MODEL: ${CALENDAI_FALLBACK_MODEL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      BOT_MODE: polling
+      BOT_DEFAULT_TIMEZONE: ${BOT_DEFAULT_TIMEZONE:-+07:00}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:

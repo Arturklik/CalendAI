@@ -18,7 +18,7 @@ authentication, differential synchronization (Last-Write-Wins), a Telegram bot
 backend/
 ├── app/
 │   ├── main.py            # FastAPI app, CORS, routers, lifespan (bot)
-│   ├── config.py          # Pydantic Settings (.env)
+│   ├── config.py          # Pydantic Settings (root .env)
 │   ├── database.py        # async engine, sessionmaker, Base, get_db
 │   ├── db_types.py        # UTCDateTime — timezone-aware UTC on any DB
 │   ├── models/            # User, Event (AGENTS.md contract)
@@ -29,26 +29,27 @@ backend/
 ├── tests/                 # pytest + pytest-asyncio + httpx (SQLite in-memory)
 ├── alembic/               # migrations
 ├── Dockerfile             # built from the MONOREPO ROOT
-├── docker-compose.yml     # postgres:16-alpine + backend
-├── requirements.txt
-└── .env.example
+└── requirements.txt
 ```
 
 ## Quick start (Docker)
 
-Build and run from the **monorepo root** (the image includes both `backend/`
-and `ai_module/`):
+Build and run the full stack from the **monorepo root** (the backend image
+includes both `backend/` and `ai_module/`):
 
 ```bash
-docker compose -f backend/docker-compose.yml up --build
+cp .env.example .env   # configure keys as needed
+docker compose up --build
+# or: ./start.sh
 ```
 
-The API is exposed at `http://localhost:8000` (docs: `/docs`, health: `/health`).
-Alembic migrations are applied automatically on container startup.
+The dashboard is exposed at `http://localhost:3000`; the API is at
+`http://localhost:8000` (docs: `/docs`, health: `/health`). Alembic migrations
+are applied automatically before the API starts. The root `.env` configures
+the database, JWT secret, AI provider, and optional Telegram bot.
 
-Environment variables can be supplied via `backend/.env` (see `.env.example`)
-or the shell environment: `JWT_SECRET_KEY`, `CALENDAI_API_KEY`,
-`CALENDAI_BASE_URL`, `CALENDAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `BOT_MODE`.
+Set `TELEGRAM_BOT_TOKEN` to enable polling; leave it blank to run without the
+bot. Follow logs with `docker compose logs -f backend`.
 
 ## Local development
 
@@ -74,14 +75,14 @@ UV_PYTHON_INSTALL_DIR="$PWD/.python" .tools/uv pip install \
   --python .venv/bin/python -r requirements.txt
 ```
 
-Then, for either option:
+Then, from the repository root, create the shared configuration and start
+PostgreSQL for local backend development:
 
 ```bash
-cp .env.example .env          # fill in JWT_SECRET_KEY, CALENDAI_API_KEY, ...
-
-# Database: PostgreSQL from compose, or SQLite for a quick start —
-#   DATABASE_URL=sqlite+aiosqlite:///./calendai.db in .env
-docker compose -f docker-compose.yml up db -d
+cd ..
+cp .env.example .env
+docker compose up db -d
+cd backend
 
 alembic upgrade head          # migrations
 uvicorn app.main:app --port 8000   # API + Telegram bot (polling)
@@ -177,5 +178,5 @@ at `POST /tg/webhook`).
 > (`TelegramConflictError: terminated by other getUpdates request`), and the bot
 > will only see a subset of messages (`/start` and photos may even land in
 > different databases). Stop the first instance before starting the second:
-> `docker compose -f backend/docker-compose.yml stop backend` or `Ctrl+C` in
+> `docker compose stop backend` or `Ctrl+C` in
 > the terminal running `uvicorn`.

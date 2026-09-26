@@ -46,18 +46,29 @@ class ParseTextRequest(BaseModel):
 
 def _map_ai_errors(exc: Exception) -> HTTPException:
     """Единообразное преобразование ошибок AI-слоя в HTTP."""
+    if isinstance(exc, ai_service.AIConfigurationError):
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
     if isinstance(exc, ai_service.AIServiceUnavailableError):
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        )
+    if isinstance(exc, ai_service.AIProviderUnavailableError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "AI-провайдер временно перегружен. "
+                "Попробуйте повторить запрос через минуту."
+            ),
         )
     if isinstance(exc, ai_service.UnsupportedImageError):
         return HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
         )
     if isinstance(exc, ValueError):
-        return HTTPException(
-            status_code=422, detail=str(exc)
-        )
+        return HTTPException(status_code=422, detail=str(exc))
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"Ошибка распознавания: {exc}",

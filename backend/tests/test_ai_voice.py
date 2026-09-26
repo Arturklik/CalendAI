@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
+from unittest.mock import Mock
 
+import httpx
 import pytest
 from app.services import ai_service
 from httpx import AsyncClient
+from openai import APIStatusError
 
-from ai_module import ScheduleParseResponse
+from ai_module import (
+    AIConfigurationError,
+    AIProviderUnavailableError,
+    ScheduleParseResponse,
+)
 
 
 async def test_parse_voice_transcribes_and_parses_schedule(
@@ -72,3 +80,39 @@ async def test_parse_voice_requires_auth(client: AsyncClient) -> None:
         files={"file": ("schedule.mp3", b"audio-data", "audio/mpeg")},
     )
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (429, AIProviderUnavailableError),
+        (503, AIProviderUnavailableError),
+        (401, AIConfigurationError),
+        (404, AIConfigurationError),
+    ],
+)
+async def test_transcribe_audio_classifies_provider_status_errors(
+    status_code: int,
+    expected_error: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "https://provider.example/v1/audio/transcriptions")
+    error = APIStatusError(
+        "provider error",
+        response=httpx.Response(status_code, request=request),
+        body={"error": "provider error"},
+    )
+    client = SimpleNamespace(
+        audio=SimpleNamespace(
+            transcriptions=SimpleNamespace(create=Mock(side_effect=error))
+        )
+    )
+    monkeypatch.setattr(ai_service, "get_parser", lambda: SimpleNamespace(_client=client))
+    monkeypatch.setattr(
+        ai_service,
+        "get_settings",
+        lambda: SimpleNamespace(whisper_model="whisper-1"),
+    )
+
+    with pytest.raises(expected_error):
+        await ai_service.transcribe_audio(b"audio-data", "voice.oga")

@@ -1,13 +1,14 @@
 """Конфигурация приложения (Pydantic Settings).
 
-Все параметры читаются из переменных окружения / файла `.env`
-(см. `.env.example`). Префиксы не используются — имена переменных
+Все параметры читаются из переменных окружения / корневого файла `.env`
+(см. корневой `.env.example`). Префиксы не используются — имена переменных
 совпадают с именами полей в UPPER_CASE.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     """Настройки backend-сервиса CalendAI."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     calendai_api_key: str | None = None
     calendai_base_url: str | None = None
     calendai_model: str | None = None
+    calendai_fallback_model: str | None = None
 
     # --- Telegram-бот ---
     telegram_bot_token: str | None = None

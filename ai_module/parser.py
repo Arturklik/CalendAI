@@ -13,15 +13,18 @@
 from __future__ import annotations
 
 import base64
+import json
+import logging
 import mimetypes
 import os
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import APIStatusError, BadRequestError, OpenAI
 
 try:  # пакетный импорт (python -m ai_module.cli)
     from .models import ScheduleParseResponse
@@ -29,8 +32,18 @@ except ImportError:  # запуск скриптом из каталога ai_mo
     from models import ScheduleParseResponse
 
 DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-1.5-flash"
 DEFAULT_TIMEZONE_OFFSET = "+07:00"
 _TZ_RE = re.compile(r"[+-](?:0\d|1[0-4]):[0-5]\d")
+_RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_FALLBACK_STATUS_CODES = frozenset({404, 429, 503})
+_MAX_PROVIDER_RETRIES = 3
+_RETRY_BASE_DELAY_SECONDS = 0.5
+_RETRY_MAX_DELAY_SECONDS = 2.0
+AI_CONFIGURATION_ERROR_MESSAGE = (
+    "Ошибка конфигурации модели: проверьте CALENDAI_MODEL и API-ключ в .env"
+)
+logger = logging.getLogger(__name__)
 
 # Академическая сетка звонков.
 CLASS_PERIODS = (
@@ -42,8 +55,13 @@ CLASS_PERIODS = (
 )
 
 _WEEKDAYS_RU = (
-    "понедельник", "вторник", "среда", "четверг",
-    "пятница", "суббота", "воскресенье",
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
 )
 
 SYSTEM_PROMPT = """\
@@ -60,6 +78,7 @@ SYSTEM_PROMPT = """\
 5 пара: 16:40–18:15
 
 Правила:
+- Корневой JSON всегда является объектом с полем "events", содержащим массив занятий.
 - Если время начала/конца занятия указано явно — используй его, а не сетку звонков.
 - Часовой пояс задаёт пользователь. Все start_time и end_time формируй как
   ISO 8601 с часовым поясом, например "2026-09-08T09:00:00+07:00".
@@ -82,6 +101,21 @@ SYSTEM_PROMPT = """\
 - description — дополнительные пометки (подгруппа, чётность недели и т.п.), иначе null.
 - Ничего не выдумывай: распознавай только то, что реально есть в расписании.
 """
+
+
+class AIProviderUnavailableError(RuntimeError):
+    """AI provider remained unavailable after bounded transient-error retries."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"AI provider is temporarily unavailable (HTTP {status_code})")
+
+
+class AIConfigurationError(RuntimeError):
+    """Invalid AI model or credentials; retrying the same request will not help."""
+
+    def __init__(self) -> None:
+        super().__init__(AI_CONFIGURATION_ERROR_MESSAGE)
 
 
 def _strict_json_schema() -> dict[str, Any]:
@@ -122,6 +156,7 @@ class ScheduleParser:
         *,
         timeout: float = 120.0,
         client: OpenAI | None = None,
+        fallback_model: str | None = None,
     ) -> None:
         load_dotenv()
         self.api_key = (
@@ -136,11 +171,23 @@ class ScheduleParser:
             base_url or os.getenv("CALENDAI_BASE_URL") or os.getenv("OPENAI_BASE_URL")
         )
         self.model = (
-            model or os.getenv("CALENDAI_MODEL") or os.getenv("OPENAI_MODEL")
+            model
+            or os.getenv("CALENDAI_MODEL")
+            or os.getenv("OPENAI_MODEL")
             or DEFAULT_MODEL
         )
+        self.fallback_model = (
+            fallback_model
+            or os.getenv("CALENDAI_FALLBACK_MODEL")
+            or self._default_fallback_model(self.model, self.base_url)
+        )
         self._client = client or OpenAI(
-            api_key=self.api_key, base_url=self.base_url, timeout=timeout
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=timeout,
+            # Retries are handled here so transient provider failures have a
+            # bounded, deterministic backoff and a user-facing error type.
+            max_retries=0,
         )
 
     # ---------------- Публичное API ----------------
@@ -213,7 +260,7 @@ class ScheduleParser:
         ]
         try:
             # Structured Outputs: строгая JSON Schema исключает галлюцинации формата.
-            response = self._client.chat.completions.create(
+            response = self._create_completion(
                 model=self.model,
                 messages=messages,
                 temperature=0,
@@ -226,10 +273,12 @@ class ScheduleParser:
                     },
                 },
             )
-        except Exception:
-            # Если провайдер (Gemini / DeepSeek) не поддерживает strict json_schema,
-            # откатываемся на базовый JSON-режим (структуру задаёт системный промпт).
-            response = self._client.chat.completions.create(
+        except BadRequestError as exc:
+            # Fallback нужен только провайдерам, не поддерживающим response_format
+            # json_schema. Не повторяем запрос в JSON-режиме при 503/429/ошибках сети.
+            if not self._supports_json_schema_fallback(exc):
+                raise
+            response = self._create_completion(
                 model=self.model,
                 messages=messages,
                 temperature=0,
@@ -242,12 +291,156 @@ class ScheduleParser:
             raise RuntimeError(f"Модель отказалась отвечать: {refusal}")
         if not message.content:
             raise RuntimeError("Модель вернула пустой ответ")
-        return ScheduleParseResponse.model_validate_json(message.content)
+        try:
+            payload = json.loads(message.content)
+        except json.JSONDecodeError:
+            return ScheduleParseResponse.model_validate_json(message.content)
+
+        # Некоторые OpenAI-совместимые провайдеры игнорируют объектную JSON
+        # Schema в fallback JSON-режиме и возвращают сам массив занятий.
+        if isinstance(payload, list):
+            payload = {"events": payload}
+        return ScheduleParseResponse.model_validate(payload)
+
+    def _create_completion(self, **request: Any) -> Any:
+        """Request the primary model, then use the configured fallback when needed."""
+        primary_model = str(request.get("model") or self.model)
+        provider_error: APIStatusError | None = None
+        for attempt in range(_MAX_PROVIDER_RETRIES + 1):
+            try:
+                return self._client.chat.completions.create(**request)
+            except APIStatusError as exc:
+                provider_error = exc
+                self._log_provider_error(request, exc)
+                if exc.status_code not in _RETRYABLE_STATUS_CODES:
+                    break
+                if attempt >= _MAX_PROVIDER_RETRIES:
+                    break
+
+                delay = min(
+                    _RETRY_BASE_DELAY_SECONDS * (2**attempt),
+                    _RETRY_MAX_DELAY_SECONDS,
+                )
+                time.sleep(delay)
+
+        if provider_error is None:  # pragma: no cover - loop always returns or errors
+            raise AssertionError("unreachable")
+
+        if (
+            provider_error.status_code in _FALLBACK_STATUS_CODES
+            and self.fallback_model
+            and self.fallback_model != primary_model
+        ):
+            logger.warning(
+                "Primary AI model %s failed with HTTP %s; trying fallback model %s",
+                primary_model,
+                provider_error.status_code,
+                self.fallback_model,
+            )
+            fallback_request = {**request, "model": self.fallback_model}
+            try:
+                return self._create_fallback_completion(fallback_request)
+            except APIStatusError as fallback_error:
+                if provider_error.status_code == 404:
+                    raise AIConfigurationError() from provider_error
+                self._raise_provider_error(fallback_error)
+
+        self._raise_provider_error(provider_error)
+
+    def _create_fallback_completion(self, request: dict[str, Any]) -> Any:
+        """Retry temporary fallback failures, without recursively falling back."""
+        for attempt in range(_MAX_PROVIDER_RETRIES + 1):
+            try:
+                return self._client.chat.completions.create(**request)
+            except APIStatusError as exc:
+                self._log_provider_error(request, exc)
+                if exc.status_code not in _RETRYABLE_STATUS_CODES:
+                    raise
+                if attempt >= _MAX_PROVIDER_RETRIES:
+                    raise
+
+                delay = min(
+                    _RETRY_BASE_DELAY_SECONDS * (2**attempt),
+                    _RETRY_MAX_DELAY_SECONDS,
+                )
+                time.sleep(delay)
+
+        raise AssertionError("unreachable")  # pragma: no cover
 
     @staticmethod
-    def _user_prompt(
-        base_date: datetime | date, timezone_offset: str
-    ) -> str:
+    def _default_fallback_model(model: str, base_url: str | None) -> str:
+        """Choose a fallback from the same known provider when possible."""
+        model_name = model.lower()
+        provider_url = (base_url or "").lower()
+
+        if "openrouter.ai" in provider_url:
+            return "google/gemini-1.5-flash"
+        if "deepseek" in provider_url or model_name.startswith("deepseek-"):
+            return "deepseek-reasoner" if model_name == "deepseek-chat" else "deepseek-chat"
+        if (
+            "generativelanguage.googleapis.com" in provider_url
+            or "gemini" in model_name
+        ):
+            return DEFAULT_GEMINI_FALLBACK_MODEL
+        if "api.openai.com" in provider_url or model_name.startswith("gpt-"):
+            return "gpt-4o" if model_name == "gpt-4o-mini" else "gpt-4o-mini"
+        return DEFAULT_GEMINI_FALLBACK_MODEL
+
+    @staticmethod
+    def _log_provider_error(request: dict[str, Any], error: APIStatusError) -> None:
+        """Log response details so provider configuration issues are diagnosable."""
+        try:
+            body = error.response.text
+        except Exception:  # pragma: no cover - defensive for custom OpenAI clients
+            body = ""
+        body = body or str(getattr(error, "message", None) or error)
+        logger.error(
+            "AI provider request failed: model=%s status=%s response=%s",
+            request.get("model"),
+            error.status_code,
+            body,
+        )
+
+    @staticmethod
+    def _raise_provider_error(error: APIStatusError) -> NoReturn:
+        if error.status_code in {401, 404}:
+            raise AIConfigurationError() from error
+        if error.status_code in _RETRYABLE_STATUS_CODES:
+            raise AIProviderUnavailableError(error.status_code) from error
+        raise error
+
+    @staticmethod
+    def _supports_json_schema_fallback(error: BadRequestError) -> bool:
+        """Return true only for 400 responses that reject structured JSON mode."""
+        message = str(error).lower()
+        mentions_schema_mode = any(
+            marker in message
+            for marker in (
+                "json_schema",
+                "json schema",
+                "response_format",
+                "structured output",
+                "structured outputs",
+            )
+        )
+        explicitly_unsupported = any(
+            marker in message
+            for marker in (
+                "not supported",
+                "unsupported",
+                "does not support",
+                "only supports",
+                "unknown parameter",
+                "unknown name",
+                "cannot find field",
+                "unrecognized field",
+                "unrecognized request argument",
+            )
+        )
+        return mentions_schema_mode and explicitly_unsupported
+
+    @staticmethod
+    def _user_prompt(base_date: datetime | date, timezone_offset: str) -> str:
         weekday = _WEEKDAYS_RU[base_date.weekday()]
         return (
             f"Опорная дата (день отправки сообщения): {base_date:%Y-%m-%d} ({weekday}). "

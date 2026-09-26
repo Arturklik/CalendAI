@@ -14,6 +14,31 @@ The monorepo contains four components:
 | **Web dashboard** (`frontend/`) | Vite, React, TypeScript, Tailwind CSS | Schedule management, AI timetable import, account settings |
 | **AI module** (`ai_module/`) | Python 3.10+, Pydantic v2, OpenAI SDK | Timetable recognition via OpenAI-compatible Vision API |
 
+## Run the full stack
+
+Docker Compose starts PostgreSQL, the FastAPI backend (including Alembic
+migrations and the optional Telegram bot), and the production web dashboard.
+For manual startup, create the root `.env` from `.env.example` once with
+`cp .env.example .env`, configure any API keys you need, then start everything
+with one command:
+
+```bash
+docker compose up --build
+```
+
+Or use the convenience script, which creates `.env` when needed and prompts
+before starting:
+
+```bash
+./start.sh
+```
+
+The dashboard is available at <http://localhost:3000> for registration and
+login, the API at <http://localhost:8000>, and its health check at
+<http://localhost:8000/health>. Leave `TELEGRAM_BOT_TOKEN` blank to run without
+the bot; setting it enables polling alongside FastAPI. Stop the stack with
+`Ctrl+C` or `docker compose down`; the PostgreSQL data volume is preserved.
+
 ## Mobile client
 
 - **Offline-first by design**: the app is fully functional without network
@@ -78,9 +103,8 @@ event CRUD, AI parsing endpoints (`/api/v1/ai/*`), and a Telegram bot
 (aiogram 3) that accepts timetable photos/voice messages, renders a per-day
 preview, and persists the recognized classes to the user's calendar.
 
-```bash
-docker compose -f backend/docker-compose.yml up --build   # from the repo root
-```
+Run the API with the full stack from the repository root using the instructions
+in [Run the full stack](#run-the-full-stack).
 
 Local setup (SQLite/PostgreSQL), tests, and linting: see
 [`backend/README.md`](backend/README.md).
@@ -88,16 +112,16 @@ Local setup (SQLite/PostgreSQL), tests, and linting: see
 ## Web dashboard
 
 The React dashboard provides month, week, and day calendar views, event
-management, image and voice schedule imports, and account settings. Its Vite
-development server proxies `/api` requests to the local backend at
-`http://localhost:8000`.
+management, image and voice schedule imports, and account settings. In the
+Docker stack it is built and served by Nginx, which proxies `/api/` requests to
+the backend and supports client-side routes.
 
-Start the backend first (see [`backend/README.md`](backend/README.md)), then run
-the dashboard from the repository root:
+For frontend-only development, run the Vite development server (its `/api`
+proxy targets a locally running backend at `http://localhost:8000`):
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -127,8 +151,7 @@ ai_module/
 ├── models.py          # EventType, ParsedCalendarEvent, ScheduleParseResponse
 ├── parser.py          # ScheduleParser + system prompt + strict JSON Schema
 ├── cli.py             # test CLI with tabular output
-├── requirements.txt
-└── .env.example       # configuration template
+└── requirements.txt
 ```
 
 ### Usage
@@ -137,14 +160,14 @@ ai_module/
 cd ai_module
 python -m venv .venv && source .venv/bin/activate   # Python 3.10+
 pip install -r requirements.txt
-cp .env.example .env    # add the provider API key (DeepSeek / OpenRouter / OpenAI)
+# Set CALENDAI_API_KEY in the root .env (or export it in the shell).
 
 python cli.py --image schedule.png --date 2026-09-20   # --date is the base date
 python cli.py --text "Monday: 1st period Calculus, room 214" --date 2026-09-20
 python cli.py --image schedule.png --date 2026-09-20 --tz +03:00
 ```
 
-Configuration via `.env` (see `.env.example`):
+Configuration via the root `.env` (see [`.env.example`](.env.example)):
 
 ```
 CALENDAI_API_KEY=sk-...                      # provider API key (required)

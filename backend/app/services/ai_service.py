@@ -12,6 +12,8 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
+from ai_module import AIConfigurationError as AIConfigurationError
+from ai_module import AIProviderUnavailableError as AIProviderUnavailableError
 from ai_module import ScheduleParser, ScheduleParseResponse
 
 from ..config import get_settings
@@ -49,6 +51,7 @@ def get_parser() -> ScheduleParser:
             api_key=settings.calendai_api_key,
             base_url=settings.calendai_base_url,
             model=settings.calendai_model,
+            fallback_model=settings.calendai_fallback_model,
         )
     return _parser
 
@@ -75,16 +78,12 @@ async def parse_schedule_image(
     """
     suffix = _IMAGE_SUFFIXES.get(content_type or "", ".jpg")
     if content_type is not None and content_type not in _IMAGE_SUFFIXES:
-        raise UnsupportedImageError(
-            f"Неподдерживаемый тип изображения: {content_type}"
-        )
+        raise UnsupportedImageError(f"Неподдерживаемый тип изображения: {content_type}")
 
     parser = get_parser()
     tmp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            suffix=suffix, delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(image_bytes)
             tmp_path = Path(tmp.name)
         return await asyncio.to_thread(
@@ -106,9 +105,7 @@ async def parse_schedule_text(
     пользователя: от неё вычисляются даты занятий по дню недели.
     """
     parser = get_parser()
-    return await asyncio.to_thread(
-        parser.parse_text, text, base_date, timezone_offset
-    )
+    return await asyncio.to_thread(parser.parse_text, text, base_date, timezone_offset)
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
@@ -122,11 +119,19 @@ async def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
     model = get_settings().whisper_model
 
     def _transcribe() -> str:
-        result = client.audio.transcriptions.create(
-            model=model,
-            file=(filename, audio_bytes),
-        )
-        return result.text
+        try:
+            result = client.audio.transcriptions.create(
+                model=model,
+                file=(filename, audio_bytes),
+            )
+            return result.text
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            if status_code == 401 or status_code == 404:
+                raise AIConfigurationError() from exc
+            if status_code in {408, 429, 500, 502, 503, 504}:
+                raise AIProviderUnavailableError(status_code) from exc
+            raise
 
     text = await asyncio.to_thread(_transcribe)
     if not text or not text.strip():

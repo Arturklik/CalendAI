@@ -52,23 +52,40 @@ TYPE_LABELS = {
 }
 
 _WEEKDAYS_RU = (
-    "Понедельник", "Вторник", "Среда", "Четверг",
-    "Пятница", "Суббота", "Воскресенье",
+    "Понедельник",
+    "Вторник",
+    "Среда",
+    "Четверг",
+    "Пятница",
+    "Суббота",
+    "Воскресенье",
 )
 _WEEKDAYS_SHORT_RU = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
 _MONTHS_GENITIVE_RU = (
-    "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
 )
 
 CB_ADD_ALL = "cal_add_all"
 CB_CANCEL = "cal_cancel"
+CB_RETRY_RECOGNITION = "cal_retry_recognition"
 
 
 class AddEventsState(StatesGroup):
     """Ожидание подтверждения добавления распознанных событий."""
 
     confirm = State()
+    retry = State()
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +101,19 @@ def _keyboard() -> InlineKeyboardMarkup:
                     text="✅ Добавить все в календарь", callback_data=CB_ADD_ALL
                 ),
                 InlineKeyboardButton(text="❌ Отмена", callback_data=CB_CANCEL),
+            ]
+        ]
+    )
+
+
+def _retry_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 Повторить попытку",
+                    callback_data=CB_RETRY_RECOGNITION,
+                )
             ]
         ]
     )
@@ -169,9 +199,7 @@ def _format_preview(
         groups.setdefault(day, []).append(event)
 
     days = sorted(groups)
-    lines = [
-        f"Распознано занятий: {len(response.events)} {_count_phrase(days, today)}"
-    ]
+    lines = [f"Распознано занятий: {len(response.events)} {_count_phrase(days, today)}"]
     for day in days:
         lines.append("")
         lines.append(f"📅 {_day_header(day, today)}")
@@ -195,9 +223,7 @@ def _format_preview(
 
 async def _get_user_by_telegram_id(telegram_id: int) -> User | None:
     async with async_session_factory() as session:
-        return await session.scalar(
-            select(User).where(User.telegram_id == telegram_id)
-        )
+        return await session.scalar(select(User).where(User.telegram_id == telegram_id))
 
 
 async def _process_schedule(
@@ -205,22 +231,93 @@ async def _process_schedule(
     state: FSMContext,
     response: ScheduleParseResponse,
     base_date: date,
+    *,
+    edit_message: bool = False,
 ) -> None:
     """Общий финал фото/войс-хэндлеров: превью + кнопки подтверждения."""
     if not response.events:
-        await message.answer(
+        text = (
             "Не удалось распознать занятия. Попробуйте более чёткое фото "
             "или добавьте события вручную в приложении."
         )
+        await state.clear()
+        if edit_message:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
         return
     await state.set_state(AddEventsState.confirm)
-    await state.update_data(
-        events=[e.model_dump(mode="json") for e in response.events]
+    await state.update_data(events=[e.model_dump(mode="json") for e in response.events])
+    preview = _format_preview(response, today=base_date)
+    if edit_message:
+        await message.edit_text(preview, reply_markup=_keyboard())
+    else:
+        await message.answer(preview, reply_markup=_keyboard())
+
+
+async def _recognize_media(
+    bot: Bot,
+    file_id: str,
+    media_type: str,
+    base_date: date,
+) -> ScheduleParseResponse:
+    """Download a previously received Telegram file and run its recognition flow."""
+    if media_type not in {"photo", "voice"}:
+        raise ValueError("Неизвестный тип сохранённого файла")
+
+    settings = get_settings()
+    buffer = io.BytesIO()
+    await bot.download(file_id, destination=buffer)
+
+    if media_type == "photo":
+        return await ai_service.parse_schedule_image(
+            buffer.getvalue(),
+            "image/jpeg",
+            base_date,
+            settings.bot_default_timezone,
+        )
+
+    transcript = await ai_service.transcribe_audio(
+        buffer.getvalue(), filename="voice.oga"
     )
-    await message.answer(
-        _format_preview(response, today=base_date),
-        reply_markup=_keyboard(),
+    return await ai_service.parse_schedule_text(
+        transcript,
+        base_date,
+        settings.bot_default_timezone,
     )
+
+
+def _recognition_error_message(error: Exception) -> str:
+    if isinstance(error, ai_service.AIConfigurationError):
+        return str(error)
+    if isinstance(error, ai_service.AIProviderUnavailableError):
+        return (
+            "⚠️ AI-провайдер временно перегружен. "
+            "Попробуйте снова через минуту, нажав кнопку ниже."
+        )
+    return f"❌ Ошибка распознавания: {error}"
+
+
+async def _present_recognition_error(
+    message: Message,
+    state: FSMContext,
+    error: Exception,
+    *,
+    edit_message: bool = False,
+) -> None:
+    """Keep the saved media only for transient errors that can be retried."""
+    if isinstance(error, ai_service.AIProviderUnavailableError):
+        await state.set_state(AddEventsState.retry)
+        markup = _retry_keyboard()
+    else:
+        await state.clear()
+        markup = None
+
+    text = _recognition_error_message(error)
+    if edit_message:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
 
 
 # ---------------------------------------------------------------------------
@@ -248,8 +345,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         )
     except auth_service.AuthError:
         await message.answer(
-            "❌ Ссылка недействительна или истекла. "
-            "Получите новый токен в приложении."
+            "❌ Ссылка недействительна или истекла. Получите новый токен в приложении."
         )
         return
 
@@ -296,21 +392,20 @@ async def handle_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     # Опорная дата — локальный день отправки сообщения (а не UTC-дата),
     # от неё модель отсчитывает дни недели из расписания.
     base_date = _local_date(message.date, settings.bot_default_timezone)
+    photo = message.photo[-1]  # максимальное доступное разрешение
+    await state.clear()
+    await state.update_data(
+        last_file_id=photo.file_id,
+        media_type="photo",
+        base_date=base_date.isoformat(),
+    )
 
     await message.answer("🔍 Распознаю расписание с фото…")
     try:
-        photo = message.photo[-1]  # максимальное доступное разрешение
-        buffer = io.BytesIO()
-        await bot.download(photo.file_id, destination=buffer)
-        response = await ai_service.parse_schedule_image(
-            buffer.getvalue(),
-            "image/jpeg",
-            base_date,
-            settings.bot_default_timezone,
-        )
+        response = await _recognize_media(bot, photo.file_id, "photo", base_date)
     except Exception as exc:
         logger.exception("Ошибка распознавания фото")
-        await message.answer(f"❌ Ошибка распознавания: {exc}")
+        await _present_recognition_error(message, state, exc)
         return
     await _process_schedule(message, state, response, base_date)
 
@@ -328,33 +423,81 @@ async def handle_voice(message: Message, state: FSMContext, bot: Bot) -> None:
 
     settings = get_settings()
     base_date = _local_date(message.date, settings.bot_default_timezone)
+    file_id = message.voice.file_id
+    await state.clear()
+    await state.update_data(
+        last_file_id=file_id,
+        media_type="voice",
+        base_date=base_date.isoformat(),
+    )
 
     await message.answer("🎙 Распознаю голосовое сообщение…")
     try:
-        buffer = io.BytesIO()
-        await bot.download(message.voice.file_id, destination=buffer)
-        transcript = await ai_service.transcribe_audio(
-            buffer.getvalue(), filename="voice.oga"
-        )
-        response = await ai_service.parse_schedule_text(
-            transcript,
-            base_date,
-            settings.bot_default_timezone,
-        )
+        response = await _recognize_media(bot, file_id, "voice", base_date)
     except Exception as exc:
         logger.exception("Ошибка обработки голосового сообщения")
-        await message.answer(f"❌ Ошибка распознавания: {exc}")
+        await _present_recognition_error(message, state, exc)
         return
     await _process_schedule(message, state, response, base_date)
+
+
+@router.callback_query(F.data == CB_RETRY_RECOGNITION, AddEventsState.retry)
+async def cb_retry_recognition(
+    callback: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    """Re-download the saved photo/voice message and retry recognition."""
+    message = callback.message
+    if message is None or not hasattr(message, "edit_text"):
+        await callback.answer("Сообщение больше недоступно.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    file_id = data.get("last_file_id")
+    media_type = data.get("media_type")
+    try:
+        base_date = date.fromisoformat(str(data["base_date"]))
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        await message.edit_text("Не удалось восстановить файл. Отправьте его ещё раз.")
+        await callback.answer()
+        return
+
+    if not isinstance(file_id, str) or media_type not in {"photo", "voice"}:
+        await state.clear()
+        await message.edit_text("Не удалось восстановить файл. Отправьте его ещё раз.")
+        await callback.answer()
+        return
+
+    await message.edit_text("⏳ Повторяю распознавание…")
+    await callback.answer()
+    try:
+        response = await _recognize_media(bot, file_id, media_type, base_date)
+    except Exception as exc:
+        logger.exception("Ошибка повторного распознавания файла")
+        await _present_recognition_error(
+            message,
+            state,
+            exc,
+            edit_message=True,
+        )
+        return
+
+    await _process_schedule(
+        message,
+        state,
+        response,
+        base_date,
+        edit_message=True,
+    )
 
 
 @router.callback_query(F.data == CB_ADD_ALL, AddEventsState.confirm)
 async def cb_add_all(callback: CallbackQuery, state: FSMContext) -> None:
     """Подтверждение: батч-сохранение распознанных событий."""
     telegram_id = callback.from_user.id if callback.from_user else None
-    user = (
-        await _get_user_by_telegram_id(telegram_id) if telegram_id else None
-    )
+    user = await _get_user_by_telegram_id(telegram_id) if telegram_id else None
     if user is None:
         await callback.answer("Аккаунт не привязан.", show_alert=True)
         await state.clear()

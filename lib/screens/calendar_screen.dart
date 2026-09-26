@@ -402,6 +402,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Модальные формы сами учитывают viewInsets клавиатуры. Не сжимать
+      // под ними календарную сетку — на iPhone это давало subpixel overflow.
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: const Text('CalendAI'),
         actions: [
